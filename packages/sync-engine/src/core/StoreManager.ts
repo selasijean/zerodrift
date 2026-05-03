@@ -43,6 +43,10 @@ import {
   createBrowserSSEFactory,
 } from "./SyncConnection";
 import { ModelStream, type ModelStreamMessageTransform } from "./ModelStream";
+import {
+  BatchModelLoader,
+  type IndexBatchFetcher,
+} from "./BatchModelLoader";
 import { BaseModel } from "./BaseModel";
 import {
   BootstrapPhase,
@@ -217,6 +221,19 @@ export interface StoreManagerConfig {
     ids: string[],
   ) => Promise<Record<string, unknown>[]>;
 
+  /**
+   * Batched index-query fetcher. When provided, concurrent
+   * `loadCollection(modelName, indexKey, value)` calls — including the per-axis
+   * fan-out a `coveringIndexes` collection produces — coalesce into a single
+   * call within one microtask. Identical triples dedupe; the server returns a
+   * map keyed by model name; the loader splits each model's records back to
+   * the originating waiters by FK match.
+   *
+   * If omitted, each loadCollection still calls `onDemandFetcher` per triple
+   * (existing behavior).
+   */
+  onDemandIndexBatchFetcher?: IndexBatchFetcher;
+
   onPhaseChange?: (phase: BootstrapPhase, detail?: string) => void;
   onDeltaPacket?: (packet: DeltaPacket) => void;
   onReady?: () => void;
@@ -270,6 +287,8 @@ export class StoreManager {
    */
   private partialIndexCoverage = new Map<string, PartialIndexEntry>();
   private loadedIds = new Set<string>();
+  /** Wired only when `onDemandIndexBatchFetcher` is configured. */
+  private indexBatchLoader: BatchModelLoader | null = null;
 
   constructor(config: StoreManagerConfig) {
     this.config = config;
@@ -286,6 +305,11 @@ export class StoreManager {
     this.transactionQueue.setErrorReporter((err, ctx) =>
       this.emitError(err, ctx),
     );
+    if (config.onDemandIndexBatchFetcher != null) {
+      this.indexBatchLoader = new BatchModelLoader(
+        config.onDemandIndexBatchFetcher,
+      );
+    }
     BaseModel.storeManager = this; // wire auto-commit
   }
 
@@ -1221,9 +1245,16 @@ export class StoreManager {
     const isEphemeral = meta?.loadStrategy === LoadStrategy.Ephemeral;
     const results = [...inMemory] as T[];
 
+    // Single resolved fetcher — either the batched loader or the per-triple
+    // callback. Routing both through one local lets TS narrow the null check.
+    const fetchFromServer = this.indexBatchLoader != null
+      ? (m: string, k: string, v: string) =>
+          this.indexBatchLoader!.load({ modelName: m, indexKey: k, value: v })
+      : this.config.onDemandFetcher;
+
     if (
       meta?.loadStrategy !== LoadStrategy.Instant &&
-      this.config.onDemandFetcher != null &&
+      fetchFromServer != null &&
       !this.partialIndexCoverage.has(key)
     ) {
       // The server fetch intentionally happens before the IDB read.
@@ -1240,11 +1271,7 @@ export class StoreManager {
       //
       // Contrast with loadOne: a single ID lookup is binary — either the record
       // is in IDB or it isn't — so the server is only consulted as a last resort.
-      const serverRecords = await this.config.onDemandFetcher(
-        modelName,
-        indexKey,
-        value,
-      );
+      const serverRecords = await fetchFromServer(modelName, indexKey, value);
       if (serverRecords.length > 0) {
         if (isEphemeral) {
           // Ephemeral models skip IDB — hydrate directly into the pool
@@ -1699,6 +1726,8 @@ export class StoreManager {
     }
     this.modelStreams = [];
     this.transactionQueue.destroy();
+    this.indexBatchLoader?.dispose();
+    this.indexBatchLoader = null;
     await this.database.close();
     this.objectPool.clear();
     this.stores.clear();
