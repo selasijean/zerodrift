@@ -140,7 +140,7 @@ export interface StorageAdapter {
    * connect. Populated during `connect()`. StoreManager runs a targeted
    * full fetch for just these so adopters don't need to bump anything.
    */
-  readonly migrationAddedNewModels: string[];
+  readonly newlyAddedModels: string[];
   writeModels(
     modelName: string,
     records: Record<string, unknown>[],
@@ -214,7 +214,7 @@ export class Database implements StorageAdapter {
   private workspaceId: string;
   private meta: DatabaseMeta | null = null;
 
-  migrationAddedNewModels: string[] = [];
+  newlyAddedModels: string[] = [];
   /** Set to true if connect() cleared rows for one or more models because
    * their per-model `schemaVersion` bumped. Forces a Full bootstrap so the
    * cleared rows refill from the server. */
@@ -232,7 +232,7 @@ export class Database implements StorageAdapter {
     // Reset per-connect flags so reconnects don't carry forward a previous
     // session's "force Full" signal.
     this.migrationClearedModels = false;
-    this.migrationAddedNewModels = [];
+    this.newlyAddedModels = [];
 
     // Gracefully handle environments without IndexedDB (Node.js, agents).
     // All methods guard on this.db == null, so the engine runs in-memory.
@@ -278,8 +278,8 @@ export class Database implements StorageAdapter {
       // created (covering the legacy-meta + new-model case where stored
       // versions are empty); on the typical "adopter added a new model" path
       // both sources fire for the same name, so we dedupe.
-      this.migrationAddedNewModels = [
-        ...new Set([...this.migrationAddedNewModels, ...newlyAdded]),
+      this.newlyAddedModels = [
+        ...new Set([...this.newlyAddedModels, ...newlyAdded]),
       ];
     }
 
@@ -407,7 +407,7 @@ export class Database implements StorageAdapter {
     for (const modelName of registeredModels) {
       if (!existingStores.has(modelName)) {
         this.createModelStore(db, modelName);
-        this.migrationAddedNewModels.push(modelName);
+        this.newlyAddedModels.push(modelName);
       }
     }
 
@@ -491,8 +491,8 @@ export class Database implements StorageAdapter {
     // If migration added new model stores AND there's no prior sync, fall
     // back to Full — there's nothing to fetch deltas against. With a
     // lastSyncId in hand, partial bootstrap proceeds and StoreManager runs
-    // a targeted fullBootstrap call for just `migrationAddedNewModels` after.
-    if (this.migrationAddedNewModels.length > 0 && meta.lastSyncId <= 0) {
+    // a targeted fullBootstrap call for just `newlyAddedModels` after.
+    if (this.newlyAddedModels.length > 0 && meta.lastSyncId <= 0) {
       return BootstrapType.Full;
     }
 

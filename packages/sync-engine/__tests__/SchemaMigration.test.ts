@@ -173,7 +173,7 @@ describe("Per-model schemaVersion migration", () => {
 
     await adapter.connect();
 
-    expect(adapter.migrationAddedNewModels).toEqual(["TestActivity"]);
+    expect(adapter.newlyAddedModels).toEqual(["TestActivity"]);
   });
 
   it("does not flag any models as 'new' on legacy meta (no stored versions at all)", async () => {
@@ -192,7 +192,7 @@ describe("Per-model schemaVersion migration", () => {
 
     await adapter.connect();
 
-    expect(adapter.migrationAddedNewModels).toEqual([]);
+    expect(adapter.newlyAddedModels).toEqual([]);
   });
 
   it("StoreManager runs a targeted full fetch for newly added models after partial bootstrap", async () => {

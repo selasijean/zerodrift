@@ -33,19 +33,19 @@ export class MemoryAdapter implements StorageAdapter {
   migrationClearedModels = false;
   /** Names of models added since the last connect — StoreManager target-fetches
    * these so adopters don't have to bump schemaVersion by hand. */
-  migrationAddedNewModels: string[] = [];
+  newlyAddedModels: string[] = [];
 
   async connect(): Promise<void> {
     this.connected = true;
     this.migrationClearedModels = false;
-    this.migrationAddedNewModels = [];
+    this.newlyAddedModels = [];
     if (this.meta != null) {
       const { cleared, newlyAdded } = await diffModelVersions(
         this,
         this.meta.modelSchemaVersions,
       );
       this.migrationClearedModels = cleared.length > 0;
-      this.migrationAddedNewModels = newlyAdded;
+      this.newlyAddedModels = newlyAdded;
       if (cleared.length > 0 || newlyAdded.length > 0) {
         this.meta.modelSchemaVersions = currentModelVersions();
       }

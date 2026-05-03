@@ -409,9 +409,9 @@ export class StoreManager {
       } else if (type === BootstrapType.Partial) {
         await this.partialBootstrap();
         // Partial deltas can't fill newly-added models — fetch them in full.
-        if (this.database.migrationAddedNewModels.length > 0) {
+        if (this.database.newlyAddedModels.length > 0) {
           await this.fetchNewlyAddedModels(
-            this.database.migrationAddedNewModels,
+            this.database.newlyAddedModels,
           );
         }
       } else {
