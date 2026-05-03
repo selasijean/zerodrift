@@ -10,7 +10,7 @@ You bring the backend. The client speaks a small three-endpoint protocol — imp
 - **Realtime** — multi-tab and multi-client sync via SSE. Other clients' edits show up without polling.
 - **Offline** — IndexedDB-backed; transactions queue while disconnected and replay on reconnect.
 - **Decorator-driven schema** — declare models once in TypeScript, get persistence, change tracking, relationships, and cascade deletes for free.
-- **Batched undo/redo** — group writes into a single undoable action.
+- **Batched undo/redo** — group writes into a single undoable action; `runUndoable(fn)` puts non-model server calls on the same stack.
 - **Headless** — no React or DOM dependency in the core. Run it in Node for agents, CLIs, or service-side workers.
 - **Bring your own backend** — three endpoints, no specific language or storage required.
 
@@ -142,6 +142,12 @@ batch(() => {
 });
 
 const { undo, redo, canUndo, canRedo } = useUndoRedo();
+
+// Non-model server calls — wrap to put on the undo stack alongside model edits.
+const { archivedCount } = await sm.runUndoable(
+  () => api.bulkArchive({ teamId }),    // returns { changeLogId, ... }
+  { actionType: "bulkArchive" },
+);
 ```
 
 ### Lazy collections
@@ -240,13 +246,14 @@ new StoreManager({
 });
 ```
 
-`ctx.kind` is one of: `eagerReferenceLoad`, `eagerCollectionLoad`, `lazyCollectionLoad`, `lazyOwnedCollectionLoad`, `lazyBackRefLoad`, `deferredBootstrap`, `newModelsBootstrap`, `transactionDiscarded`, `syncGroupFetch`, `ssePacketParse`, `sseConstruction`, `transactionSend`, `onSyncGroupDelete`. Each carries fields specific to its site (model name, parent id, raw SSE message, etc.). Without `onError`, internal failures are silently dropped (existing behavior preserved).
+`ctx.kind` is one of: `eagerReferenceLoad`, `eagerCollectionLoad`, `lazyCollectionLoad`, `lazyOwnedCollectionLoad`, `lazyBackRefLoad`, `deferredBootstrap`, `newModelsBootstrap`, `transactionDiscarded`, `syncGroupFetch`, `ssePacketParse`, `sseConstruction`, `transactionSend`, `onSyncGroupDelete`, `undoableAction`. Each carries fields specific to its site (model name, parent id, raw SSE message, etc.). Without `onError`, internal failures are silently dropped (existing behavior preserved).
 
 Other lifecycle hooks on the same config:
 
 - `onPhaseChange(phase, detail)` — bootstrap state machine (`Idle` → `Fetching` → `Hydrating` → `Ready` | `Error`).
 - `onDeltaPacket(packet)` — fires on every SSE delta after it processes.
 - `onReady()` — fires when bootstrap completes.
+- `undoableActions: { undo, redo? }` — handlers for `runUndoable(fn)` entries on the undo stack. Each receives the recorded `UndoableAction` and returns the compensating action (or void to reuse the original). See [`agent-docs/06-transactions-and-undo.md`](agent-docs/06-transactions-and-undo.md).
 
 ### Isolated vs shared agent state
 

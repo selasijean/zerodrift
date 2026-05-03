@@ -23,6 +23,7 @@ import {
   CreateTransaction,
   DeleteTransaction,
   ArchiveTransaction,
+  type UndoableAction,
 } from "./Transaction";
 import { TransactionState, type PropertyChange } from "./types";
 import type { BaseModel } from "./BaseModel";
@@ -51,12 +52,33 @@ interface CachedTransactionRecord {
   syncIdNeededForCompletion?: number;
 }
 
-// An undo entry: either one transaction or a group
+type UndoItem = BaseTransaction | UndoableAction;
+
 type UndoEntry =
-  | { kind: "single"; tx: BaseTransaction }
-  | { kind: "batch"; batchId: string; txs: BaseTransaction[] };
+  | { kind: "single"; item: UndoItem }
+  | { kind: "batch"; batchId: string; entries: UndoItem[] };
+
+export type UndoPhase = "undo" | "redo";
+
+export interface UndoResult {
+  txs: BaseTransaction[];
+  actions: UndoableAction[];
+}
+
+/** Handlers the consumer supplies via `StoreManagerConfig.undoableActions`.
+ *  Each handler talks to the consumer's backend change-log API and returns the
+ *  compensating action so the engine can place it on the opposite stack.
+ *  Returning `void` reuses the original entry — fine when the same
+ *  `changeLogId` is replayable in either direction. */
+export interface UndoableActionHandlers {
+  undo: (action: UndoableAction) => Promise<UndoableAction | void>;
+  redo?: (action: UndoableAction) => Promise<UndoableAction | void>;
+}
 
 type Listener = () => void;
+
+const isAction = (e: UndoItem): e is UndoableAction =>
+  !(e instanceof BaseTransaction);
 
 export class TransactionQueue {
   private database: StorageAdapter;
@@ -72,9 +94,13 @@ export class TransactionQueue {
   private undoStack: UndoEntry[] = [];
   private redoStack: UndoEntry[] = [];
 
-  // Active batch state
+  // Active batch state. `activeBatchEntries` mixes BaseTransactions and
+  // UndoableActions so a single user action that combines model edits and
+  // remote API calls undoes as one unit, in reverse insertion order.
   private activeBatchId: string | null = null;
-  private activeBatchTxs: BaseTransaction[] = [];
+  private activeBatchEntries: (BaseTransaction | UndoableAction)[] = [];
+
+  private actionHandlers: UndoableActionHandlers | null = null;
 
   // When true, enqueue() and endBatch() skip undo stack mutations.
   // Set during undo/redo so their inverse operations don't re-enter the stack.
@@ -105,6 +131,10 @@ export class TransactionQueue {
     this.sender = sender;
   }
 
+  setActionHandlers(handlers: UndoableActionHandlers) {
+    this.actionHandlers = handlers;
+  }
+
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
     return () => {
@@ -121,7 +151,7 @@ export class TransactionQueue {
   beginBatch(): string {
     const batchId = crypto.randomUUID();
     this.activeBatchId = batchId;
-    this.activeBatchTxs = [];
+    this.activeBatchEntries = [];
     return batchId;
   }
 
@@ -129,11 +159,11 @@ export class TransactionQueue {
     if (this.activeBatchId !== batchId) {
       return;
     }
-    if (this.activeBatchTxs.length > 0 && !this.suppressUndoStack) {
+    if (this.activeBatchEntries.length > 0 && !this.suppressUndoStack) {
       this.undoStack.push({
         kind: "batch",
         batchId,
-        txs: [...this.activeBatchTxs],
+        entries: [...this.activeBatchEntries],
       });
       if (this.undoStack.length > this.undoLimit) {
         this.undoStack.shift();
@@ -142,7 +172,7 @@ export class TransactionQueue {
       this.notify();
     }
     this.activeBatchId = null;
-    this.activeBatchTxs = [];
+    this.activeBatchEntries = [];
   }
 
   // ── Enqueue methods (one per transaction type) ────────────────────────────
@@ -178,6 +208,25 @@ export class TransactionQueue {
     await this.enqueue(tx);
   }
 
+  /** Record an already-committed remote side-effect on the undo stack. No
+   *  pending/executing/awaitingSync involvement and no IDB caching — the
+   *  consumer's API call already happened, so there's nothing to resend. */
+  enqueueAction(action: UndoableAction) {
+    if (this.activeBatchId != null) {
+      this.activeBatchEntries.push(action);
+      return;
+    }
+    if (this.suppressUndoStack) {
+      return;
+    }
+    this.undoStack.push({ kind: "single", item: action });
+    if (this.undoStack.length > this.undoLimit) {
+      this.undoStack.shift();
+    }
+    this.redoStack = [];
+    this.notify();
+  }
+
   async enqueueArchive(model: BaseModel) {
     const meta = ModelRegistry.getMetaForInstance(model);
     const tx = new ArchiveTransaction(
@@ -197,9 +246,9 @@ export class TransactionQueue {
     // Tag with batch if one is active
     if (this.activeBatchId != null) {
       tx.batchId = this.activeBatchId;
-      this.activeBatchTxs.push(tx);
+      this.activeBatchEntries.push(tx);
     } else if (!this.suppressUndoStack) {
-      this.undoStack.push({ kind: "single", tx });
+      this.undoStack.push({ kind: "single", item: tx });
       if (this.undoStack.length > this.undoLimit) {
         this.undoStack.shift();
       }
@@ -369,94 +418,184 @@ export class TransactionQueue {
     }
   }
 
-  // ── Undo/Redo — batch-aware ───────────────────────────────────────────────
+  // ── Undo/Redo — batch-aware, mixed tx + action entries ──────────────────
 
-  async undo(): Promise<BaseTransaction[] | null> {
+  private itemsOf(entry: UndoEntry): UndoItem[] {
+    return entry.kind === "single" ? [entry.item] : entry.entries;
+  }
+
+  /** Build the inverse-stack entry from a list of replaced items. Single-item
+   *  entries collapse to `single`, otherwise reuse the original `batchId`. */
+  private wrapEntry(original: UndoEntry, items: UndoItem[]): UndoEntry {
+    if (original.kind === "single") {
+      return { kind: "single", item: items[0] };
+    }
+    return { kind: "batch", batchId: original.batchId, entries: items };
+  }
+
+  /** Run the consumer's action handler, surfacing failures through
+   *  `reportError`. Returns the compensating action for the opposite stack —
+   *  the handler's return value, or the original action on void/error. */
+  private async invokeActionHandler(
+    action: UndoableAction,
+    phase: UndoPhase,
+  ): Promise<UndoableAction> {
+    const handler = this.actionHandlers?.[phase];
+    if (handler == null) {
+      this.reportError?.(
+        new Error(`No ${phase} handler configured for undoable actions`),
+        {
+          kind: "undoableAction",
+          phase,
+          changeLogId: action.changeLogId,
+          actionType: action.actionType,
+        },
+      );
+      return action;
+    }
+    try {
+      const result = await handler(action);
+      return result ?? action;
+    } catch (err) {
+      this.reportError?.(toError(err), {
+        kind: "undoableAction",
+        phase,
+        changeLogId: action.changeLogId,
+        actionType: action.actionType,
+      });
+      return action;
+    }
+  }
+
+  /** Reverse a single transaction and enqueue the inverse server call. */
+  private async revertTx(tx: BaseTransaction) {
+    if (tx instanceof UpdateTransaction) {
+      const model = this.pool.getById(tx.modelName, tx.modelId);
+      if (model == null) {
+        return;
+      }
+      tx.revert(model);
+      this.pool.put(tx.modelName, model);
+      const inverse: Record<string, PropertyChange> = {};
+      for (const [p, c] of tx.changes) {
+        inverse[p] = { oldValue: c.newValue, newValue: c.oldValue };
+      }
+      await this.enqueueUpdate(tx.modelId, tx.modelName, inverse);
+    } else if (tx instanceof CreateTransaction) {
+      const model = this.pool.getById(tx.modelName, tx.modelId);
+      if (model != null) {
+        await this.enqueueDelete(model);
+      }
+    } else if (tx instanceof DeleteTransaction) {
+      const meta = ModelRegistry.getModelMeta(tx.modelName);
+      if (meta != null) {
+        this.pool.hydrateAndPut(tx.modelName, meta, tx.snapshot);
+        await this.enqueueCreate(tx.modelId, tx.modelName, tx.snapshot);
+      }
+    }
+    // ArchiveTransaction has no inverse enqueue today — pass through.
+  }
+
+  /** Re-apply a single transaction and enqueue the forward server call. */
+  private async replayTx(tx: BaseTransaction) {
+    if (tx instanceof UpdateTransaction) {
+      const model = this.pool.getById(tx.modelName, tx.modelId);
+      if (model == null) {
+        return;
+      }
+      const changes: Record<string, PropertyChange> = {};
+      for (const [p, c] of tx.changes) {
+        // Dynamic property assignment on BaseModel — no better type for runtime field access
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (model as any)[p] = c.newValue;
+        changes[p] = { oldValue: c.oldValue, newValue: c.newValue };
+      }
+      this.pool.put(tx.modelName, model);
+      await this.enqueueUpdate(tx.modelId, tx.modelName, changes);
+    } else if (tx instanceof DeleteTransaction) {
+      const model = this.pool.getById(tx.modelName, tx.modelId);
+      if (model != null) {
+        await this.enqueueDelete(model);
+      }
+    } else if (tx instanceof CreateTransaction) {
+      const meta = ModelRegistry.getModelMeta(tx.modelName);
+      if (meta != null) {
+        this.pool.hydrateAndPut(tx.modelName, meta, tx.data);
+        await this.enqueueCreate(tx.modelId, tx.modelName, tx.data);
+      }
+    }
+  }
+
+  /** Walk an entry's items in `direction`, applying tx reverts/replays and
+   *  delegating actions to the consumer's handler. Returns the compensating
+   *  items for the opposite stack, in original insertion order. */
+  private async processEntry(
+    entry: UndoEntry,
+    direction: UndoPhase,
+  ): Promise<UndoItem[]> {
+    const items = this.itemsOf(entry);
+    const swaps = new Map<UndoableAction, UndoableAction>();
+
+    // suppressUndoStack prevents inverse txs (and any handler-side re-entries)
+    // from polluting the active stack while we replay.
+    this.suppressUndoStack = true;
+    const batchId = this.beginBatch();
+    try {
+      const apply = direction === "undo" ? this.revertTx : this.replayTx;
+      const order = direction === "undo" ? -1 : 1;
+      for (
+        let i = direction === "undo" ? items.length - 1 : 0;
+        i >= 0 && i < items.length;
+        i += order
+      ) {
+        const item = items[i];
+        if (isAction(item)) {
+          swaps.set(item, await this.invokeActionHandler(item, direction));
+        } else {
+          await apply.call(this, item);
+        }
+      }
+    } finally {
+      this.endBatch(batchId);
+      this.suppressUndoStack = false;
+    }
+
+    return items.map((x) => (isAction(x) ? swaps.get(x) ?? x : x));
+  }
+
+  private partition(items: UndoItem[]): UndoResult {
+    const txs: BaseTransaction[] = [];
+    const actions: UndoableAction[] = [];
+    for (const x of items) {
+      if (isAction(x)) {
+        actions.push(x);
+      } else {
+        txs.push(x);
+      }
+    }
+    return { txs, actions };
+  }
+
+  async undo(): Promise<UndoResult | null> {
     const entry = this.undoStack.pop();
     if (entry == null) {
       return null;
     }
-    this.redoStack.push(entry);
-
-    const txs = entry.kind === "single" ? [entry.tx] : entry.txs;
-
-    // Revert in reverse order, then enqueue inverse operations.
-    // suppressUndoStack prevents the inverse transactions from re-entering the undo stack.
-    this.suppressUndoStack = true;
-    const batchId = this.beginBatch();
-    for (let i = txs.length - 1; i >= 0; i--) {
-      const tx = txs[i];
-      if (tx instanceof UpdateTransaction) {
-        const model = this.pool.getById(tx.modelName, tx.modelId);
-        if (model != null) {
-          tx.revert(model);
-          this.pool.put(tx.modelName, model);
-          const inverse: Record<string, PropertyChange> = {};
-          for (const [p, c] of tx.changes) {
-            inverse[p] = { oldValue: c.newValue, newValue: c.oldValue };
-          }
-          await this.enqueueUpdate(tx.modelId, tx.modelName, inverse);
-        }
-      } else if (tx instanceof CreateTransaction) {
-        const model = this.pool.getById(tx.modelName, tx.modelId);
-        if (model != null) {
-          await this.enqueueDelete(model);
-        }
-      } else if (tx instanceof DeleteTransaction) {
-        const meta = ModelRegistry.getModelMeta(tx.modelName);
-        if (meta != null) {
-          this.pool.hydrateAndPut(tx.modelName, meta, tx.snapshot);
-          await this.enqueueCreate(tx.modelId, tx.modelName, tx.snapshot);
-        }
-      }
-    }
-    this.endBatch(batchId);
-    this.suppressUndoStack = false;
+    const replayed = await this.processEntry(entry, "undo");
+    this.redoStack.push(this.wrapEntry(entry, replayed));
     this.notify();
-    return txs;
+    return this.partition(this.itemsOf(entry));
   }
 
-  async redo(): Promise<BaseTransaction[] | null> {
+  async redo(): Promise<UndoResult | null> {
     const entry = this.redoStack.pop();
     if (entry == null) {
       return null;
     }
-    this.undoStack.push(entry);
-
-    const txs = entry.kind === "single" ? [entry.tx] : entry.txs;
-    this.suppressUndoStack = true;
-    const batchId = this.beginBatch();
-    for (const tx of txs) {
-      if (tx instanceof UpdateTransaction) {
-        const model = this.pool.getById(tx.modelName, tx.modelId);
-        if (model != null) {
-          const changes: Record<string, PropertyChange> = {};
-          for (const [p, c] of tx.changes) {
-            // Dynamic property assignment on BaseModel — no better type for runtime field access
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (model as any)[p] = c.newValue;
-            changes[p] = { oldValue: c.oldValue, newValue: c.newValue };
-          }
-          this.pool.put(tx.modelName, model);
-          await this.enqueueUpdate(tx.modelId, tx.modelName, changes);
-        }
-      } else if (tx instanceof DeleteTransaction) {
-        const model = this.pool.getById(tx.modelName, tx.modelId);
-        if (model != null) {
-          await this.enqueueDelete(model);
-        }
-      } else if (tx instanceof CreateTransaction) {
-        const meta = ModelRegistry.getModelMeta(tx.modelName);
-        if (meta != null) {
-          this.pool.hydrateAndPut(tx.modelName, meta, tx.data);
-          await this.enqueueCreate(tx.modelId, tx.modelName, tx.data);
-        }
-      }
-    }
-    this.endBatch(batchId);
-    this.suppressUndoStack = false;
+    const replayed = await this.processEntry(entry, "redo");
+    this.undoStack.push(this.wrapEntry(entry, replayed));
     this.notify();
-    return txs;
+    return this.partition(this.itemsOf(entry));
   }
 
   // ── Reconnection ──────────────────────────────────────────────────────────

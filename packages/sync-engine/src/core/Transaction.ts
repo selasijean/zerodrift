@@ -162,6 +162,21 @@ export class DeleteTransaction extends BaseTransaction {
   }
 }
 
+/**
+ * A side-effect that's already been committed via a non-model API call (e.g. a
+ * server bulk-mutation endpoint that returns a `changeLogId`). Lives on the
+ * undo stack alongside `BaseTransaction`s so user actions that mix model edits
+ * and remote calls can be undone atomically. Reverted via the consumer's
+ * `undoableActions.undo` handler — the engine itself doesn't know how.
+ */
+export interface UndoableAction {
+  id: string;
+  changeLogId: string;
+  actionType?: string;
+  metadata?: Record<string, unknown>;
+  timestamp: number;
+}
+
 export class ArchiveTransaction extends BaseTransaction {
   readonly action = "A" as const;
   readonly snapshot: Record<string, unknown>;

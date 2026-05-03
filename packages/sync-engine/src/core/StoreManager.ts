@@ -35,7 +35,12 @@ import {
   EphemeralStore,
   type ModelStore,
 } from "./Store";
-import { TransactionQueue, type TransactionSender } from "./TransactionQueue";
+import {
+  TransactionQueue,
+  type TransactionSender,
+  type UndoableActionHandlers,
+} from "./TransactionQueue";
+import type { UndoableAction } from "./Transaction";
 import {
   SyncConnection,
   type DeltaPacket,
@@ -274,6 +279,22 @@ export interface StoreManagerConfig {
     groupId: string,
     sm: StoreManager,
   ) => void | Promise<void>;
+
+  /**
+   * Hooks for undoing/redoing remote side-effects committed via non-model APIs
+   * (bulk-mutation endpoints, server-side workflow runs, etc.). The engine
+   * tracks these on the same undo stack as model transactions; when the user
+   * hits undo, it calls `undoableActions.undo` with the recorded
+   * `UndoableAction` and lets the consumer make the compensating API call.
+   *
+   * Each handler returns the compensating `UndoableAction` so the engine can
+   * place it on the opposite stack. Returning `void` is fine when the same
+   * `changeLogId` is replayable in either direction.
+   *
+   * Wire `StoreManager.runUndoable(fn)` in your code wherever you call such
+   * an API. Failures are surfaced through `onError` with `kind: "undoableAction"`.
+   */
+  undoableActions?: UndoableActionHandlers;
 }
 
 export class StoreManager {
@@ -321,6 +342,9 @@ export class StoreManager {
     this.transactionQueue.setErrorReporter((err, ctx) =>
       this.emitError(err, ctx),
     );
+    if (config.undoableActions != null) {
+      this.transactionQueue.setActionHandlers(config.undoableActions);
+    }
     if (config.onDemandIndexBatchFetcher != null) {
       this.indexBatchLoader = new BatchModelLoader(
         config.onDemandIndexBatchFetcher,
@@ -1243,6 +1267,35 @@ export class StoreManager {
   }
   redo() {
     return this.transactionQueue.redo();
+  }
+
+  /**
+   * Run a remote side-effect that returns a `changeLogId`, and record it on
+   * the undo stack so the next `undo()` invokes the consumer's
+   * `undoableActions.undo` handler with that id.
+   *
+   * The function may return either the `changeLogId` string directly, or any
+   * object with a `changeLogId` field — in which case the full object is
+   * returned to the caller. Inside an open `batch()`, the action joins the
+   * batch and undoes alongside the model transactions.
+   *
+   * If `fn` throws, nothing is recorded.
+   */
+  async runUndoable<T extends string | { changeLogId: string }>(
+    fn: () => Promise<T> | T,
+    opts?: { actionType?: string; metadata?: Record<string, unknown> },
+  ): Promise<T> {
+    const result = await fn();
+    const changeLogId = typeof result === "string" ? result : result.changeLogId;
+    const action: UndoableAction = {
+      id: crypto.randomUUID(),
+      changeLogId,
+      actionType: opts?.actionType,
+      metadata: opts?.metadata,
+      timestamp: Date.now(),
+    };
+    this.transactionQueue.enqueueAction(action);
+    return result;
   }
 
   // ── Lazy loading ──────────────────────────────────────────────────────────

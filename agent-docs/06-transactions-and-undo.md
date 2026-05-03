@@ -106,7 +106,7 @@ Every transaction enqueued while a batch is open gets the same `batchId`. They'r
 
 ## Undo/Redo
 
-The undo stack is an array of entries, each either `{ kind: "single", tx }` or `{ kind: "batch", txs }`.
+The undo stack is an array of entries, each either `{ kind: "single", item }` or `{ kind: "batch", batchId, entries }`. `item` and `entries` hold `BaseTransaction | UndoableAction` — model transactions and remote actions sit on the same stack so a single user action that mixes both undoes atomically. See "Undoable remote actions" below for the `UndoableAction` side.
 
 ### Undo
 
@@ -114,10 +114,12 @@ The undo stack is an array of entries, each either `{ kind: "single", tx }` or `
 const entry = undoStack.pop();
 redoStack.push(entry);
 
-// For each transaction in the entry (reversed order):
+// For each item in the entry (reversed order):
 //   UpdateTransaction: revert model to oldValue, enqueue inverse update
 //   DeleteTransaction: re-create model from snapshot, enqueue create
 //   CreateTransaction: delete model, enqueue delete
+//   UndoableAction:    invoke undoableActions.undo(action) — consumer
+//                      makes the compensating server call
 ```
 
 Crucially, `undo()` doesn't just revert the in-memory model — it **enqueues inverse transactions to the server**. The undo is persistent and synced. If you undo a title change, every other client sees the revert via SSE.
@@ -143,7 +145,64 @@ Any new user edit after an undo clears the redo stack — standard undo/redo beh
 const { undo, redo, canUndo, canRedo } = useUndoRedo();
 ```
 
-`canUndo` and `canRedo` are reactive — components re-render when the stacks change. This is how the Undo/Redo buttons in the demo app enable/disable themselves.
+`canUndo` and `canRedo` are reactive — components re-render when the stacks change. This is how the Undo/Redo buttons in the demo app enable/disable themselves. The hook is unchanged when undoable actions are mixed in — depths cover both `BaseTransaction` and `UndoableAction` entries.
+
+## Undoable remote actions
+
+Some user actions are committed by a non-model server endpoint that returns a `changeLogId` rather than by editing a model and letting the engine flush a transaction (e.g. bulk-mutation endpoints, server-side workflows, archive/restore APIs that span hundreds of rows). To put these on the same undo stack as model edits:
+
+```typescript
+const { archivedCount } = await sm.runUndoable(
+  () => api.bulkArchive({ teamId }),    // returns { changeLogId, archivedCount }
+  { actionType: "bulkArchive" },
+);
+```
+
+`runUndoable(fn, opts?)` awaits `fn`, extracts a `changeLogId` (either the string returned directly or the `changeLogId` field of the returned object), records an `UndoableAction` on the stack, and returns whatever `fn` returned. If `fn` throws, nothing is recorded — failed API calls never leave dangling stack entries.
+
+Inside an open `batch()`, the action joins the active batch and undoes alongside the model transactions in reverse insertion order.
+
+### Configuring the handlers
+
+The engine itself doesn't know how to undo a `changeLogId` — the consumer does. Wire handlers on `StoreManagerConfig`:
+
+```typescript
+new StoreManager({
+  // ...
+  undoableActions: {
+    undo: async (action) => {
+      const r = await api.changeLog.undo(action.changeLogId);
+      return { ...action, changeLogId: r.compensatingChangeLogId };
+    },
+    redo: async (action) => {
+      const r = await api.changeLog.redo(action.changeLogId);
+      return { ...action, changeLogId: r.compensatingChangeLogId };
+    },
+  },
+});
+```
+
+Each handler returns the compensating `UndoableAction` so the engine can place it on the opposite stack. Returning `void` is fine when the same `changeLogId` is replayable in either direction — the original entry is reused.
+
+### Failure routing
+
+When the consumer's handler throws, the engine routes through `onError` with `kind: "undoableAction"`:
+
+```typescript
+onError: (err, ctx) => {
+  if (ctx.kind === "undoableAction") {
+    // ctx.phase: "undo" | "redo"
+    // ctx.changeLogId, ctx.actionType
+    toast.error(`Couldn't ${ctx.phase}: ${err.message}`);
+  }
+},
+```
+
+The entry still moves to the opposite stack so the user can retry. Mid-batch handler failures are logged and the rest of the batch continues — already-applied items stay applied. If `redo` is omitted from `undoableActions` and a redo of an action entry is attempted, the same context fires with a "no handler configured" error.
+
+### Persistence
+
+`UndoableAction`s are **not** cached in IDB. The cached-transaction store exists to resend mutations the server hasn't confirmed; an action's API call has already returned a `changeLogId`, so there's nothing to resend. Like the rest of the undo stack, action entries live in memory only and are lost on reload.
 
 ## Offline Resilience
 

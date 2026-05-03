@@ -234,7 +234,13 @@ export type EngineErrorContext =
   | { kind: "ssePacketParse"; url: string; raw: string }
   | { kind: "sseConstruction"; url: string }
   | { kind: "transactionSend"; batchSize: number }
-  | { kind: "onSyncGroupDelete"; groupId: string };
+  | { kind: "onSyncGroupDelete"; groupId: string }
+  | {
+      kind: "undoableAction";
+      phase: "undo" | "redo";
+      changeLogId: string;
+      actionType?: string;
+    };
 
 export type EngineErrorHandler = (
   err: Error,

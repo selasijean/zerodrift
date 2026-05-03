@@ -47,8 +47,14 @@ export {
   DeleteTransaction,
   ArchiveTransaction,
 } from "./Transaction";
+export type { UndoableAction } from "./Transaction";
 export { TransactionQueue } from "./TransactionQueue";
-export type { TransactionSender, BatchResponse } from "./TransactionQueue";
+export type {
+  TransactionSender,
+  BatchResponse,
+  UndoableActionHandlers,
+  UndoResult,
+} from "./TransactionQueue";
 
 // Sync
 export { SyncConnection } from "./SyncConnection";
