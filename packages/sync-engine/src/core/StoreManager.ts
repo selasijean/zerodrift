@@ -1353,6 +1353,23 @@ export class StoreManager {
     );
   }
 
+  /**
+   * Cascade `evictByIndex` across every model type that owns this FK. Use
+   * when an "owner" id (workspaceId, teamId, userId, …) goes away and the
+   * client should drop every related row in one call. Models that don't
+   * declare `indexKey` as `indexed: true` are skipped — `deleteModelsByIndex`
+   * falls back to a full-store cursor scan when the index is missing, and
+   * walking every store at every call is rarely what the caller wants.
+   */
+  async evictAllByIndex(indexKey: string, value: string): Promise<void> {
+    const models = ModelRegistry.allModels().filter(
+      (meta) => meta.properties.get(indexKey)?.indexed === true,
+    );
+    await Promise.all(
+      models.map((meta) => this.evictByIndex(meta.name, indexKey, value)),
+    );
+  }
+
   /** Load multiple models by ID (for OwnedCollection resolution). */
   async loadByIds(modelName: string, ids: string[]): Promise<BaseModel[]> {
     if (ids.length === 0) {

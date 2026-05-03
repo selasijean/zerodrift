@@ -67,7 +67,9 @@ export function addToPool(
  * No-op IObjectPool with optional overrides. Use anywhere a test needs to
  * satisfy `BaseModel.store` without booting a real StoreManager.
  */
-export function makeFakePool(overrides: Partial<IObjectPool> = {}): IObjectPool {
+export function makeFakePool(
+  overrides: Partial<IObjectPool> = {},
+): IObjectPool {
   return {
     getById: () => undefined,
     put: () => {},
@@ -220,12 +222,24 @@ export class TestActivity extends BaseModel {
   public task: TestTask;
 }
 
-// ── TestLayeredDriver (layer-scoped model, used for index/eviction tests) ─────
+// ── TestLayeredDriver / TestLayeredAccount (layer-scoped models) ──────────────
+//
+// Both share `layerId` so cross-model eviction (`evictAllByIndex`) has more
+// than one type to walk.
 
 @ClientModel({ loadStrategy: LoadStrategy.Instant })
 export class TestLayeredDriver extends BaseModel {
   @Property()
   public name = "";
+
+  @Property({ indexed: true })
+  public layerId = "";
+}
+
+@ClientModel({ loadStrategy: LoadStrategy.Instant })
+export class TestLayeredAccount extends BaseModel {
+  @Property()
+  public label = "";
 
   @Property({ indexed: true })
   public layerId = "";

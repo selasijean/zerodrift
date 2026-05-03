@@ -20,7 +20,7 @@ import { StoreManager } from "@sync-engine/StoreManager";
 import { MemoryAdapter } from "@sync-engine/MemoryAdapter";
 import { BaseModel } from "@sync-engine/BaseModel";
 import type { SSEClientFactory } from "@sync-engine/SyncConnection";
-import { TestLayeredDriver, addToPool } from "./fixtures";
+import { TestLayeredDriver, TestLayeredAccount, addToPool } from "./fixtures";
 import {
   controllableSSEClient,
   makeFactory,
@@ -90,21 +90,33 @@ async function makeManager(
   return manager;
 }
 
-/** Seed pool + IDB with TestLayeredDriver records for a given layer. */
-async function seedLayer(
+/** Seed pool + IDB with records for a layer-scoped model. */
+async function seedLayered<T extends BaseModel>(
   manager: StoreManager,
+  Ctor: new () => T,
   layerId: string,
   ids: string[],
+  extra: (id: string) => Record<string, unknown>,
 ) {
+  const modelName = Ctor.name;
   for (const id of ids) {
-    const driver = new TestLayeredDriver();
-    driver.hydrate({ id, layerId, name: `Driver ${id}` });
-    addToPool(manager, "TestLayeredDriver", driver);
-    await manager.database.writeModels("TestLayeredDriver", [
-      { id, layerId, name: `Driver ${id}` },
-    ]);
+    const record = { id, layerId, ...extra(id) };
+    const instance = new Ctor();
+    instance.hydrate(record);
+    addToPool(manager, modelName, instance);
+    await manager.database.writeModels(modelName, [record]);
   }
 }
+
+const seedLayer = (manager: StoreManager, layerId: string, ids: string[]) =>
+  seedLayered(manager, TestLayeredDriver, layerId, ids, (id) => ({
+    name: `Driver ${id}`,
+  }));
+
+const seedAccount = (manager: StoreManager, layerId: string, ids: string[]) =>
+  seedLayered(manager, TestLayeredAccount, layerId, ids, (id) => ({
+    label: `Account ${id}`,
+  }));
 
 /** Factory that records every URL it's called with and returns a no-op client. */
 function recordingSSEFactory(): { factory: SSEClientFactory; urls: string[] } {
@@ -602,6 +614,62 @@ describe("evictByIndex()", () => {
     expect(
       await manager.database.readModel("TestLayeredDriver", "d3"),
     ).not.toBeNull();
+  });
+});
+
+describe("evictAllByIndex()", () => {
+  it("evicts matching pool + IDB records across every model declaring the index", async () => {
+    manager = await makeManager({ initialGroups: ["layer-A", "layer-B"] });
+    await seedLayer(manager, "layer-A", ["d1", "d2"]);
+    await seedLayer(manager, "layer-B", ["d3"]);
+    await seedAccount(manager, "layer-A", ["a1", "a2"]);
+    await seedAccount(manager, "layer-B", ["a3"]);
+
+    await manager.evictAllByIndex("layerId", "layer-A");
+
+    // layer-A rows gone from both pools and both IDB stores.
+    expect(
+      manager.objectPool.getById("TestLayeredDriver", "d1"),
+    ).toBeUndefined();
+    expect(
+      manager.objectPool.getById("TestLayeredDriver", "d2"),
+    ).toBeUndefined();
+    expect(
+      manager.objectPool.getById("TestLayeredAccount", "a1"),
+    ).toBeUndefined();
+    expect(
+      manager.objectPool.getById("TestLayeredAccount", "a2"),
+    ).toBeUndefined();
+    expect(
+      await manager.database.readModel("TestLayeredDriver", "d1"),
+    ).toBeNull();
+    expect(
+      await manager.database.readModel("TestLayeredAccount", "a1"),
+    ).toBeNull();
+
+    // layer-B rows untouched.
+    expect(manager.objectPool.getById("TestLayeredDriver", "d3")).toBeDefined();
+    expect(
+      manager.objectPool.getById("TestLayeredAccount", "a3"),
+    ).toBeDefined();
+    expect(
+      await manager.database.readModel("TestLayeredDriver", "d3"),
+    ).not.toBeNull();
+    expect(
+      await manager.database.readModel("TestLayeredAccount", "a3"),
+    ).not.toBeNull();
+  });
+
+  it("is a no-op when no registered model declares the indexKey", async () => {
+    manager = await makeManager();
+    await seedLayer(manager, "layer-A", ["d1"]);
+
+    // No model has a `mysteryField` indexed property — nothing happens.
+    await expect(
+      manager.evictAllByIndex("mysteryField", "anything"),
+    ).resolves.toBeUndefined();
+
+    expect(manager.objectPool.getById("TestLayeredDriver", "d1")).toBeDefined();
   });
 });
 
