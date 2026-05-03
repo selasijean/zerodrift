@@ -81,9 +81,6 @@ This is mitigated by `LoadStrategy.Lazy` and `LoadStrategy.Partial`, but for Ins
 ### No query language
 The pool is just a flat Map per model type. There are no indexes, no filtering, no sorting built into the pool itself. If you want all Issues with `priority > 2`, you call `pool.getAll("Issue").filter(...)`. For large datasets, this is a linear scan. IndexedDB indexes exist for efficient bootstrap loading, but in-memory querying is always O(n).
 
-### Relationships are unidirectional by default
-`issue.team` resolves from the pool. But "all Issues for a Team" requires a `RefCollection`, which isn't cached — it re-queries on every load. There's no maintained reverse index in the pool.
-
 ### Reference resolution can return null silently
 If `issue.teamId` is set but the Team hasn't been loaded yet, `issue.team` returns `null`. This is correct behavior (partial loading), but it means code that traverses relationships needs to handle nulls defensively, even for non-nullable declared references.
 
@@ -105,6 +102,12 @@ Not all models live fully in the pool. The `LoadStrategy` on each model controls
 `FullStore` (for Instant models) loads everything at bootstrap. `PartialStore` (for the rest) loads nothing — instances trickle in on demand and stay in the pool once loaded. `EphemeralStore` (for Ephemeral models) is a no-op — it skips both `loadFromDatabase` and `loadFromServer`, since ephemeral models are loaded on-demand and never touch IDB.
 
 This is the key mechanism for keeping the pool small. See `04-lazy-loading.md` for more detail.
+
+## Bidirectional Relationships Are Maintained Inline
+
+The pool keeps parent-side `@ReferenceCollection` / `@BackReference` collections in sync with child entries automatically. When a child enters the pool with its FK set, the pool walks the model registry, finds every parent declaration targeting the child's type, and pushes the child into the parent's runtime collection. When the child leaves or its FK changes, the pool detaches and re-attaches accordingly. `@Reference` getters are made reactive to pool identity changes via per-`(modelName, id)` MobX atoms.
+
+Adopters never call `invalidate()` or push children into parents by hand. See **[10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md)** for the full mechanism.
 
 ## In-Place Updates and Object Identity
 

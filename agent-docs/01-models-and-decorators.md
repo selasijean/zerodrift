@@ -96,6 +96,8 @@ The `onDelete` option tells the engine what to do when the referenced model is d
 - `"nullify"` — set the ID field to null (e.g., clear `assigneeId` when User is deleted)
 - `"restrict"` — throw a `RestrictDeleteError` if any instance still holds this reference (i.e., you must clean up first)
 
+The `@Reference` getter is reactive to pool identity changes (insert / remove / replacement) via per-id MobX atoms — observers reading `issue.team` wake up when the target's pool slot transitions, not just when the FK itself changes. See [10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md).
+
 ### `@LazyReference`
 
 The lazy variant of `@Reference`. Same getter/setter semantics, but `makeModelObservable()` does NOT call `storeManager.loadOne` — the accessor returns whatever's in the pool right now (or `null`). Use when the referenced model is loaded by another path (separate fetch, lazy hook, etc.). See `04-lazy-loading.md`.
@@ -121,7 +123,7 @@ One-to-many where the **foreign key lives on the child**. `team.issues` is a `Re
 - `@ReferenceCollection` — eager. `makeModelObservable()` fires `.load()` so children land in the pool alongside the parent. Recursion is automatic: each loaded child runs its own `makeModelObservable`, so eager relationships nested further down the tree also load.
 - `@LazyReferenceCollection` — lazy. Collection stays Idle until something triggers `.load()` or the `useCollection` hook subscribes.
 
-See `04-lazy-loading.md` for how this works internally.
+The `inverseOf` FK isn't only used for IDB queries — the pool also uses it to keep `team.issues.items` reactive to delta inserts/deletes/FK changes without a re-fetch. See [10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md). And see [04-lazy-loading.md](./04-lazy-loading.md) for the loading machinery.
 
 ### `@BackReference`
 
@@ -130,7 +132,7 @@ See `04-lazy-loading.md` for how this works internally.
 public favorite: BackRef;
 ```
 
-The inverse of a `@Reference`. Means: "find the Favorite record that has `issueId` pointing to me." This is also an ownership relationship — when this Issue is deleted, the engine will cascade-delete the Favorite.
+The inverse of a `@Reference`. Means: "find the Favorite record that has `issueId` pointing to me." This is also an ownership relationship — when this Issue is deleted, the engine will cascade-delete the Favorite. Like `@ReferenceCollection`, the pool keeps `issue.favorite.value` in sync with the inverse FK automatically — see [10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md).
 
 ### `@OwnedCollection` / `@LazyOwnedCollection`
 

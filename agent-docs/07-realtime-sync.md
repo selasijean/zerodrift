@@ -106,24 +106,21 @@ Is this model already in the pool?
         No  → skip (model is out of scope for this client)
 ```
 
-After inserting, two things happen:
-- **Rebase:** If there's a pending `UpdateTransaction` for this model (unlikely on insert, but possible), rebase it against the new data.
-- **Invalidate collections:** Any `RefCollection` or `OwnedRefs` that this new instance would belong to is marked dirty. On next access, it re-loads and includes the new item.
+After inserting, the engine rebases any pending `UpdateTransaction` for this model against the new data. The pool itself takes care of attaching the new instance to every parent's `@ReferenceCollection` / `@BackReference` inline — see [10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md).
 
 ### Update (`"U"`, `"V"`, `"C"`)
 
 1. Find the existing instance in the pool
-2. Capture which reference fields are changing (e.g., `teamId` changing) — needed for collection invalidation
-3. Hydrate the update (apply new field values)
-4. Rebase any pending `UpdateTransaction` for this model against the new data
-5. Invalidate collections affected by changed reference fields
+2. Hydrate the update (apply new field values via `box.set` on each MobX observable)
+3. Rebase any pending `UpdateTransaction` for this model against the new data
+
+`BaseModel.hydrate` dispatches FK changes to the pool, which detaches the model from the old parent's collection and attaches to the new one — all in a single batched MobX action.
 
 ### Delete (`"D"`) and Archive (`"A"`)
 
 1. Run cascade delete: find all models that reference this one with `onDelete: "cascade"` or via `@BackReference`, and delete them recursively
 2. Handle `onDelete: "nullify"` references: set those ID fields to null on affected models
-3. Invalidate parent collections (so they no longer include the deleted item)
-4. Remove from pool
+3. Remove from pool — the pool's `remove` detaches the instance from every parent collection and bumps its per-id atom so `@Reference` observers see `null` on next read
 
 ## Cascade Delete
 
@@ -146,18 +143,18 @@ Issue "issue-123" deleted
 
 This cascade runs **client-side** — the client applies it locally without waiting for the server to send individual delete packets for each child. The server should be consistent, but the client doesn't wait for it.
 
-## Collection Invalidation
+## Inverse-link Maintenance
 
-Rather than maintaining live, always-up-to-date collections, the engine uses **invalidation on write**. When a delta updates a model that is a member of a collection, that collection is marked dirty.
+Every `pool.put` / `pool.remove` walks a memoized cache of parent-side declarations and updates the matching `RefCollection.items` / `BackRef.value` directly. Foreign-key reassignments fire from `BaseModel.propertyChanged` (user setters) and `BaseModel.hydrate` (delta box.set writes) and re-route the child between parents in one batched action.
 
 ```
 Delta: Issue "issue-abc" updated, teamId changed from "team-a" to "team-b"
   │
-  ├── Invalidate Team("team-a").issues  ← no longer contains this issue
-  └── Invalidate Team("team-b").issues  ← now contains this issue
+  ├── Team("team-a").issues.detach("issue-abc")
+  └── Team("team-b").issues.attach(issueAbc)
 ```
 
-On the next `useCollection(team.issues)` render, the collection re-loads from the pool and reflects the change. This is simpler and more correct than trying to keep every collection perfectly in sync during every delta.
+`@Reference` getters read through a per-`(modelName, id)` MobX atom that the pool bumps on insert / remove / identity swap, so observers reading `holder.target` wake up even when the target is removed without an FK change. Full mechanism in [10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md).
 
 ## Conflict Rebase
 

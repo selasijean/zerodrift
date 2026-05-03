@@ -70,11 +70,11 @@ No async, no IDB. This runs every time you access `.items` and the collection is
 
 After this, the pool has those Issue instances and future calls use the sync path.
 
-### Invalidation
+### Inverse links
 
-When a delta packet inserts a new Issue with `teamId: "team-eng"`, the engine doesn't push it into every relevant collection manually. Instead it **invalidates** those collections — marks them dirty. On the next access (e.g., component calls `useCollection(team.issues)`), the collection re-loads from the pool and picks up the new item.
+When a delta packet inserts a new Issue with `teamId: "team-eng"`, the pool walks the registry, finds the `@ReferenceCollection` on Team that targets Issue (`inverseOf: "teamId"`), and calls `team.issues.attach(newIssue)` directly. Items is a live MobX-observable array — observers reading it (or anything derived from it via `@Computed`) wake up automatically. No invalidation, no re-query, no `.load()` cycle.
 
-This keeps the delta-processing logic simple: it just updates the pool and IDB, and lets collections re-derive their state lazily.
+The same happens in reverse on delete (`detach`) and on FK reassignment (detach from old parent, attach to new parent), and the pool also seeds children that arrived before their parent did via `populateOwnedCollectionsFromPool`. See **[10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md)** for the full mechanism.
 
 ## BackRef
 
@@ -193,9 +193,6 @@ Loading
   │ (IDB query completes)
   ▼
 Loaded
-  │ (invalidated by delta)
-  ▼
-Idle  ← back to start, will re-load on next access
 ```
 
 Or:
@@ -206,4 +203,6 @@ Loading
 Error
 ```
 
-The React hooks (`useCollection`, `useBackRef`, `useLazyCollection`) expose `isLoading`, `isLoaded`, and `error` from this state machine so components can render skeletons or error states appropriately.
+The state tracks whether the loader has run — *not* whether `items` is current. Items is kept in sync with the pool by the inverse-link machinery (see **[10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md)**), so a `Loaded` collection stays correct as deltas arrive without ever transitioning back to `Idle`. `invalidate()` still exists on the collection API — it forces the next access to re-query IDB — but the engine itself doesn't call it during normal delta flow.
+
+The React hooks read this state machine: `useCollection` and `useBackRef` (which wrap a runtime collection / back-ref directly) expose `isLoading`, `isLoaded`, and `error`. The pool-keyed hooks (`useModel`, `useModels`, `useIndexedCollection`) expose only `isLoading` and `error` — they don't carry `isLoaded` because their data may come from the pool synchronously.

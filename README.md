@@ -19,7 +19,7 @@ You bring the backend. The client speaks a small three-endpoint protocol — imp
 | Import | What's in it |
 |---|---|
 | `sync-engine` | `StoreManager`, `BaseModel`, decorators, `ObjectPool`, types. Vanilla TS — no React, no DOM. |
-| `sync-engine/react` | `<SyncProvider>` and hooks: `useModel`, `useModels`, `useCollection`, `useBackRef`, `useLazyRef`, `useUndoRedo`, `useBatch`, `useBootstrapStatus`. |
+| `sync-engine/react` | `<SyncProvider>` and hooks: `useModel`, `useModels`, `useIndexedCollection`, `useCollection`, `useBackRef`, `useUndoRedo`, `useBatch`, `useBootstrapStatus`. |
 
 ## Define your models
 
@@ -104,10 +104,12 @@ export default function Providers({ children }) {
 ### Reading data
 
 ```tsx
-const issues = useModels<Issue>("Issue");          // all instances; re-renders on add/remove
-const issue = useModel<Issue>("Issue", issueId);   // single by ID
-const { phase } = useBootstrapStatus();            // engine lifecycle state
+const { items: issues } = useModels<Issue>("Issue");        // all instances; re-renders on add/remove
+const { item: issue } = useModel<Issue>("Issue", issueId);  // single by ID; auto-loads on pool miss
+const { phase } = useBootstrapStatus();                      // engine lifecycle state
 ```
+
+Pool-keyed hooks (`useModel`, `useModels`, `useIndexedCollection`) return `{ item | items, isLoading, error, reload }`. The collection-wrapper hooks (`useCollection`, `useBackRef`) wrap a runtime collection you already hold and additionally expose `isLoaded` (and return `value` for `useBackRef`).
 
 ### Writing data
 
@@ -145,11 +147,15 @@ const { undo, redo, canUndo, canRedo } = useUndoRedo();
 ### Lazy collections
 
 ```tsx
-const { items: issues, isLoading } = useCollection(team?.issues);   // @ReferenceCollection
-const { items: members } = useCollection(team?.members);             // @OwnedCollection
-const { value: favorite } = useBackRef(issue?.favorite);             // @BackReference
-const { value: doc } = useLazyRef<DocumentContent>("DocumentContent", issue?.id);
+const { items: issues, isLoading } = useCollection(team?.issues);    // @ReferenceCollection
+const { items: members } = useCollection(team?.members);              // @OwnedCollection
+const { value: favorite } = useBackRef(issue?.favorite);              // @BackReference
+
+// When you have a model name + index key + value but not the parent instance:
+const { items: activities } = useIndexedCollection<Activity>("Activity", "taskId", taskId);
 ```
+
+`team.issues.items` stays in sync with the pool automatically — when a delta inserts a new Issue with `teamId === team.id`, the engine attaches it to the parent's collection inline, so observers re-render without a re-fetch. See [`agent-docs/10-inverse-links-and-reactivity.md`](agent-docs/10-inverse-links-and-reactivity.md).
 
 Decorator names match Linear's convention: `@Reference` / `@ReferenceCollection` / `@OwnedCollection` are eager (loaded alongside the parent, recursively for nested eager collections), and the `@Lazy*` prefixed variants are loaded on demand. See [`agent-docs/04-lazy-loading.md`](agent-docs/04-lazy-loading.md).
 
@@ -201,7 +207,7 @@ const off = sm.objectPool.subscribe("Issue", () => {
   const issues = sm.objectPool.getAll("Issue");
 });
 
-// Collection-level: fires when a lazy relationship loads or invalidates.
+// Collection-level: fires when items are attached, detached, replaced, or load() runs.
 team.issues.subscribe(() => { /* team.issues.items is current */ });
 
 // Field-level: fires when a specific field (or derived value) changes.
@@ -338,6 +344,7 @@ Deeper material lives in [`agent-docs/`](agent-docs/):
 - [07 — Realtime sync](agent-docs/07-realtime-sync.md)
 - [08 — React integration](agent-docs/08-react-integration.md)
 - [09 — Headless and agents](agent-docs/09-headless-and-agents.md)
+- [10 — Inverse links and reactivity](agent-docs/10-inverse-links-and-reactivity.md)
 
 ## Reference backend and demo
 

@@ -30,76 +30,47 @@ const { sm, status } = useSyncEngine();
 
 Gives you the raw `StoreManager` and current `status`. You won't need `sm` often — the higher-level hooks cover most cases. `status.phase` is useful if you want to show different UI during different bootstrap phases.
 
-## useModels
+## The hook surface
+
+Five public hooks for reading data, plus `useUndoRedo` for the transaction stack. Every reading hook returns the same shape — `{ item | items, isLoading, error, reload }` — so consumer code looks uniform regardless of whether the underlying source is the pool, IDB, or the server.
+
+| Hook | What it returns | When the loader fires |
+|---|---|---|
+| `useModel(name, id)` | `{ item, isLoading, error, reload }` | `loadOne` only when the pool is missing the entry. In-pool models render with `isLoading: false` from frame zero. |
+| `useModels(name, ids?)` | `{ items, isLoading, error, reload }` | No `ids` → reactive snapshot of every instance of the type, no loader. With `ids` → `loadByIds` only when at least one id is missing. Items follow the input `ids` order. |
+| `useIndexedCollection(name, indexKey, value)` | `{ items, isLoading, error, reload }` | `loadCollection` once per `(name, indexKey, value)` triple, gated by `sm.isCollectionLoaded(...)`. |
+| `useCollection(refCollection)` | `{ items, isLoading, isLoaded, error, reload }` | Wraps a `RefCollection` / `OwnedRefs` you already hold (e.g. `team.issues`). Calls `.load()` on mount if not yet loaded. |
+| `useBackRef(backRef)` | `{ value, isLoading, isLoaded, error, reload }` | Wraps a `BackRef` (e.g. `issue.favorite`). Calls `.load()` on mount if not yet loaded. |
+
+`reload()` always re-fires the loader regardless of cache state. Auto-fire on mount is gated, so already-cached data doesn't trigger a redundant IDB scan.
 
 ```typescript
-const issues = useModels<Issue>("Issue");
+// Pool-first read of a single model; falls back to loadOne on pool miss.
+const { item: issue } = useModel<Issue>("Issue", issueId);
+
+// All Issues in the pool, reactive.
+const { items: issues } = useModels<Issue>("Issue");
+
+// Specific subset by id, in input order, with async backfill for any missing.
+const { items } = useModels<Issue>("Issue", ["i1", "i2"]);
+
+// Query by FK index — useful when you don't hold the parent model.
+const { items } = useIndexedCollection<Issue>("Issue", "teamId", teamId);
 ```
 
-Returns all instances of a model type from the pool. Re-renders whenever any instance of that type is created, updated, or deleted.
+`useModels` compares `ids` by content (joined string) so inline literals don't re-trigger. `useIndexedCollection` gates auto-fire on `sm.isCollectionLoaded(...)` so remounts don't re-scan IDB.
 
-Internally uses `useSyncExternalStore`:
+### useCollection / useBackRef — wrapping a runtime collection
 
 ```typescript
-const subscribe = (onStoreChange) => pool.subscribe("Issue", onStoreChange);
-const getSnapshot = () => pool.getAll("Issue");
-useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+const { item: team } = useModel<Team>("Team", teamId);
+const { items, isLoading } = useCollection<Issue>(team?.issues);
+
+const { item: issue } = useModel<Issue>("Issue", issueId);
+const { value: favorite } = useBackRef<Favorite>(issue?.favorite);
 ```
 
-This is the correct React 18 pattern for subscribing to an external store. React can detect tearing (inconsistent reads across concurrent renders) with this API.
-
-**Use it when:** you need all instances of a type — e.g., a list of all issues in the sidebar.
-
-**Watch out:** every insert, update, or delete of any Issue causes this hook to compare snapshots. For very large collections with many components using this hook, be mindful — though in practice React's diffing handles it well.
-
-## useModel
-
-```typescript
-const issue = useModel<Issue>("Issue", issueId);
-```
-
-Returns a single model instance by ID. Returns `null` if not found or not yet loaded.
-
-Uses the same `useSyncExternalStore` mechanism, but the snapshot is just `pool.getById("Issue", issueId)`. Re-renders only when that specific instance changes — but because the pool notifies at the model-type level, this hook re-checks on any Issue change and only re-renders if the returned instance actually differs.
-
-**Use it when:** you're rendering a specific item — an issue detail view, a selected team, etc.
-
-## useCollection
-
-```typescript
-const team = useModel<Team>("Team", teamId);
-const { items, isLoading, isLoaded, error, reload } = useCollection<Issue>(team?.issues);
-```
-
-Wraps a `RefCollection` (from `@ReferenceCollection` / `@LazyReferenceCollection`) or `OwnedRefs` (from `@OwnedCollection` / `@LazyOwnedCollection`). Triggers `.load()` on mount if not already loaded, subscribes to collection invalidation, and re-loads when the collection is invalidated by a delta.
-
-The collection is passed in as an argument (from the model instance), not by name. This means TypeScript knows the element type — `team.issues` is typed as `RefCollection<Issue>`, so `items` is `Issue[]`.
-
-**Use it when:** you want to display a collection that lives on a model instance — team's issues, user's assigned tasks, etc.
-
-## useBackRef
-
-```typescript
-const { value: favorite, isLoading } = useBackRef<Favorite>(issue?.favorite);
-```
-
-Same pattern as `useCollection`, but for `BackRef` (from `@BackReference`). Returns a single item or null instead of an array.
-
-## useLazyCollection
-
-```typescript
-const { items, isLoading, error, reload } = useLazyCollection<Issue>(
-  "Issue",
-  "teamId",
-  teamId,
-);
-```
-
-The more manual version of `useCollection` — you specify the model name, index key, and value directly instead of going through a model's collection property. Useful when you don't have (or don't want) the parent model instance.
-
-Under the hood it calls `sm.loadCollection("Issue", "teamId", teamId)`, which queries IDB by index and hydrates the results.
-
-**Use it when:** you need a collection but don't have or don't want the parent model — e.g., a route-level component loading issues for a team ID from the URL params.
+When you already have the parent model, these wrap its `RefCollection` / `OwnedRefs` / `BackRef` directly. The collection is passed by reference, not by name, so TypeScript narrows the element type from the model definition. The runtime collection objects own their loading state, and the inverse-link machinery (see [10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md)) keeps `items` / `value` in sync with the pool — no invalidate / reload needed on delta.
 
 ## useUndoRedo
 
@@ -125,9 +96,9 @@ SyncConnection.processDeltaPacket()
         │
 pool.put("Issue", updatedIssue)
         │
-pool.notify("Issue")
-        │
-All pool.subscribe("Issue", ...) callbacks fire
+   ├─ inverse-link maintenance: parent collections updated
+   ├─ per-id MobX atom bumped (wakes @Reference observers)
+   └─ pool.notify("Issue") fires per-type listeners
         │
 useSyncExternalStore detects callback fired, calls getSnapshot()
         │
@@ -136,7 +107,7 @@ React compares new snapshot to previous
   → snapshot same   → no re-render
 ```
 
-The `getSnapshot()` for `useModels` returns `pool.getAll("Issue")` — the same array reference if nothing changed, or a new array if anything was added/removed/updated. React uses referential equality on the snapshot to decide whether to re-render.
+The `getSnapshot()` for `useModels` returns `pool.getAll("Issue")` — the same array reference if nothing changed, or a new array if anything was added/removed/updated. React uses referential equality on the snapshot to decide whether to re-render. Components reading `team.issues.items` inside a MobX `observer` are woken by the inverse-link layer above instead.
 
 ## Writing Data
 
@@ -171,10 +142,6 @@ sm.batch(() => {
 
 ## Phase-Gated Returns
 
-All hooks return empty/null before `status.phase === Ready`. This prevents rendering stale or empty states during bootstrap.
-
-```typescript
-return status.phase === Ready ? (models as T[]) : [];
-```
+All hooks return empty/null data fields before `status.phase === Ready`. This prevents rendering stale or empty states during bootstrap. `useModels` returns `{ items: [], … }`, `useModel` returns `{ item: null, … }`, and so on — the wrapper shape is always present.
 
 The `SyncProvider`'s `fallback` prop handles showing a loading state during bootstrap. Once `Ready`, the fallback is replaced with the app tree, and all hooks return live data.

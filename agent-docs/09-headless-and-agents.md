@@ -98,7 +98,7 @@ Note: `objectPool.subscribe` fires on structural changes (instances added/remove
 
 ### `collection.subscribe` — relationship-level reactivity
 
-Fires when a specific lazy collection loads or is invalidated by a delta:
+Fires when `items` change — a child is attached or detached by the inverse-link machinery (delta inserts / removes / FK changes), `setItems` runs, or `load()` resolves. See [10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md).
 
 ```typescript
 const team = sm.objectPool.getById("Team", teamId) as Team;

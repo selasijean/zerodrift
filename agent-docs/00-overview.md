@@ -125,3 +125,4 @@ See [09-headless-and-agents.md](./09-headless-and-agents.md) for the full headle
 7. **[07-realtime-sync.md](./07-realtime-sync.md)** — SSE connection, delta packets, conflict rebase, cascade delete
 8. **[08-react-integration.md](./08-react-integration.md)** — How the engine plugs into React
 9. **[09-headless-and-agents.md](./09-headless-and-agents.md)** — Running the engine outside the browser: agents, Node.js, reactivity without React
+10. **[10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md)** — How parent collections and `@Reference` getters stay reactive to pool changes automatically
