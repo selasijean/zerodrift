@@ -31,6 +31,14 @@ export interface DatabaseMeta {
    * interpreting data against the wrong schema.
    */
   backendDatabaseVersion: number;
+  /**
+   * Per-model `schemaVersion` snapshot at the time meta was last persisted.
+   * Adapters compare this map against the current ModelRegistry on connect
+   * and clear any model whose version bumped — stale rows in IDB serialized
+   * against the old shape get wiped so the next bootstrap re-fetches them.
+   * Filled in by the adapter; callers don't need to populate it.
+   */
+  modelSchemaVersions?: Record<string, number>;
 }
 
 export enum BootstrapType {
@@ -49,6 +57,55 @@ export interface PartialIndexEntry {
   indexKey: string;
   value: string;
   firstSyncId: number;
+}
+
+/** Snapshot of every registered model's current `schemaVersion`. */
+export function currentModelVersions(): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const meta of ModelRegistry.allModels()) {
+    out[meta.name] = meta.schemaVersion;
+  }
+  return out;
+}
+
+/**
+ * Diff stored vs current per-model schemaVersions and clear any model whose
+ * version bumped (or that was removed from the registry entirely). Returns
+ * the names of cleared models so the caller can flip its
+ * `migrationClearedModels` flag.
+ */
+export async function clearStaleModels(
+  adapter: Pick<
+    StorageAdapter,
+    "clearModelStore" | "clearPartialIndexesForModel"
+  >,
+  stored: Record<string, number> | undefined,
+): Promise<string[]> {
+  const cleared: string[] = [];
+  const current = currentModelVersions();
+  const storedMap = stored ?? {};
+  // Bumped models still in the registry: clear rows + partial-index coverage.
+  for (const [name, version] of Object.entries(current)) {
+    const previous = storedMap[name];
+    // First-time field (no record) is treated as "trust the existing data" —
+    // adopters upgrading the engine for the first time shouldn't lose rows.
+    if (previous == null || previous === version) {
+      continue;
+    }
+    await adapter.clearModelStore(name);
+    await adapter.clearPartialIndexesForModel(name);
+    cleared.push(name);
+  }
+  // Models removed from the registry: clear leftover partial-index rows so
+  // the `__partialIndexes` store doesn't accumulate orphans. (The model's
+  // own object store is already deleted by the IDB schema migration.)
+  for (const name of Object.keys(storedMap)) {
+    if (!(name in current)) {
+      await adapter.clearPartialIndexesForModel(name);
+      cleared.push(name);
+    }
+  }
+  return cleared;
 }
 
 /**
@@ -141,6 +198,10 @@ export class Database implements StorageAdapter {
 
   /** Set to true if a migration added new model stores that need data. */
   migrationAddedNewModels = false;
+  /** Set to true if connect() cleared rows for one or more models because
+   * their per-model `schemaVersion` bumped. Forces a Full bootstrap so the
+   * cleared rows refill from the server. */
+  migrationClearedModels = false;
 
   constructor(workspaceId: string) {
     this.workspaceId = workspaceId;
@@ -151,6 +212,11 @@ export class Database implements StorageAdapter {
   // =========================================================================
 
   async connect(): Promise<void> {
+    // Reset per-connect flags so reconnects don't carry forward a previous
+    // session's "force Full" signal.
+    this.migrationClearedModels = false;
+    this.migrationAddedNewModels = false;
+
     // Gracefully handle environments without IndexedDB (Node.js, agents).
     // All methods guard on this.db == null, so the engine runs in-memory.
     if (typeof indexedDB === "undefined") {
@@ -181,10 +247,19 @@ export class Database implements StorageAdapter {
     // Step 4: Reopen at newVersion → triggers onupgradeneeded
     this.db = await this.openDBWithMigration(dbName, newVersion);
 
-    // Update the dbVersion in meta after migration
+    // Step 5: Clear data for models whose schemaVersion bumped. The IDB
+    // structure migrated in step 4, but rows serialized against the old
+    // shape need to go.
+    if (meta != null) {
+      const cleared = await clearStaleModels(this, meta.modelSchemaVersions);
+      this.migrationClearedModels = cleared.length > 0;
+    }
+
+    // Update the dbVersion + per-model versions in meta after migration
     if (meta != null) {
       meta.dbVersion = newVersion;
       meta.schemaHash = ModelRegistry.schemaHash;
+      meta.modelSchemaVersions = currentModelVersions();
       await this.saveMeta(meta);
     }
   }
@@ -398,6 +473,13 @@ export class Database implements StorageAdapter {
       }
     }
 
+    // A schemaVersion bump cleared rows for one or more models — partial
+    // bootstrap won't refill them (it only ships deltas since lastSyncId).
+    // Force a Full bootstrap so cleared model stores get repopulated.
+    if (this.migrationClearedModels) {
+      return BootstrapType.Full;
+    }
+
     // Valid data exists
     if (meta.lastSyncId > 0) {
       return BootstrapType.Partial;
@@ -428,8 +510,15 @@ export class Database implements StorageAdapter {
     if (this.db == null) {
       return;
     }
-    this.meta = meta;
-    await this.idbPut("__meta", meta, "meta");
+    // Default the per-model schemaVersion snapshot from the live registry
+    // when the caller didn't provide one — so bumps are detectable on the
+    // next connect. Caller-supplied values win.
+    const merged: DatabaseMeta = {
+      ...meta,
+      modelSchemaVersions: meta.modelSchemaVersions ?? currentModelVersions(),
+    };
+    this.meta = merged;
+    await this.idbPut("__meta", merged, "meta");
   }
 
   get currentMeta() {

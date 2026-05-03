@@ -253,7 +253,9 @@ describe("Database", () => {
       };
       await db.saveMeta(meta);
       const loaded = await db.loadMeta();
-      expect(loaded).toEqual(meta);
+      // saveMeta auto-fills modelSchemaVersions from the live registry.
+      expect(loaded).toMatchObject(meta);
+      expect(loaded?.modelSchemaVersions).toBeDefined();
     });
 
     it("loadMeta returns null when nothing has been saved", async () => {
@@ -270,7 +272,7 @@ describe("Database", () => {
         backendDatabaseVersion: 0,
       };
       await db.saveMeta(meta);
-      expect(db.currentMeta).toEqual(meta);
+      expect(db.currentMeta).toMatchObject(meta);
     });
 
     it("overwrites meta on subsequent saves", async () => {

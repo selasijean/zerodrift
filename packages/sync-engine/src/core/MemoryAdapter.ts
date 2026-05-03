@@ -11,6 +11,8 @@
 
 import {
   BootstrapType,
+  clearStaleModels,
+  currentModelVersions,
   type DatabaseMeta,
   type PartialIndexEntry,
   type StorageAdapter,
@@ -27,9 +29,22 @@ export class MemoryAdapter implements StorageAdapter {
     string,
     Map<string, Map<string, number>>
   >();
+  /** Set true when connect() cleared rows for a schemaVersion-bumped model. */
+  migrationClearedModels = false;
 
   async connect(): Promise<void> {
     this.connected = true;
+    this.migrationClearedModels = false;
+    if (this.meta != null) {
+      const cleared = await clearStaleModels(
+        this,
+        this.meta.modelSchemaVersions,
+      );
+      if (cleared.length > 0) {
+        this.migrationClearedModels = true;
+        this.meta.modelSchemaVersions = currentModelVersions();
+      }
+    }
   }
 
   get isConnected(): boolean {
@@ -41,7 +56,10 @@ export class MemoryAdapter implements StorageAdapter {
   }
 
   async saveMeta(meta: DatabaseMeta): Promise<void> {
-    this.meta = meta;
+    this.meta = {
+      ...meta,
+      modelSchemaVersions: meta.modelSchemaVersions ?? currentModelVersions(),
+    };
   }
 
   get currentMeta(): DatabaseMeta | null {
@@ -49,6 +67,9 @@ export class MemoryAdapter implements StorageAdapter {
   }
 
   async determineBootstrapType(): Promise<BootstrapType> {
+    if (this.migrationClearedModels) {
+      return BootstrapType.Full;
+    }
     if (this.meta == null) {
       return BootstrapType.Full;
     }
