@@ -345,6 +345,8 @@ Two layers of compound parity, both opt-in:
 
 2. **Server-side compound queries** — when ≥ `compoundIndexFetchThreshold` (default 5) concurrent `loadCollection` requests share a parent FK value, the engine collapses them into one dotted-path query (e.g. 50 `Comment[taskId=Tx]` → one `Comment[taskId.projectId=P1]`). The server resolves the dotted path via a JOIN and returns the union; per-waiter filtering narrows each caller's slice. Opt in with `serverSupportsCompoundIndexKeys: true`; backends without JOIN support keep per-parent fan-out.
 
+   **Coverage caching.** After the compound fetch lands, the full response bag is written to IDB and the compound key is recorded in the partial-index store. A future direct `loadCollection("Comment", "taskId", T_new)` short-circuits when `T_new`'s parent FK matches the recorded compound's value — no redundant network call.
+
 ```ts
 new StoreManager({
   // ...

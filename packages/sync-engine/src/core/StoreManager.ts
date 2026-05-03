@@ -21,7 +21,7 @@
 
 import { ModelRegistry } from "./ModelRegistry";
 import { DEFAULT_TRANSIENT_INDEX_DEPTH } from "./types";
-import { ObjectPool } from "./ObjectPool";
+import { ObjectPool, readFk } from "./ObjectPool";
 import {
   Database,
   BootstrapType,
@@ -378,7 +378,12 @@ export class StoreManager {
           ? wrapCompoundFetcher(
               config.onDemandIndexBatchFetcher,
               this.objectPool,
-              config.compoundIndexFetchThreshold ?? COMPOUND_FETCH_THRESHOLD,
+              {
+                threshold:
+                  config.compoundIndexFetchThreshold ?? COMPOUND_FETCH_THRESHOLD,
+                onCompoundFetched: (compound, bag) =>
+                  this.absorbCompoundResponse(compound, bag),
+              },
             )
           : config.onDemandIndexBatchFetcher;
       this.indexBatchLoader = new BatchModelLoader(fetcher);
@@ -1372,7 +1377,11 @@ export class StoreManager {
     if (
       meta?.loadStrategy !== LoadStrategy.Instant &&
       fetchFromServer != null &&
-      !this.partialIndexCoverage.has(key)
+      !this.partialIndexCoverage.has(key) &&
+      // Compound coverage only ever exists when the adopter opted into
+      // server-side compound index keys; skip the parent/FK walk otherwise.
+      (this.config.serverSupportsCompoundIndexKeys !== true ||
+        !this.isCoveredByCompound(modelName, indexKey, value))
     ) {
       // The server fetch intentionally happens before the IDB read.
       //
@@ -1447,6 +1456,63 @@ export class StoreManager {
     );
   }
 
+  /**
+   * Derive-on-read for compound coverage: a direct triple
+   * `(modelName, indexKey, value)` is implicitly covered when a previously-
+   * fetched compound query `(modelName, "indexKey.fk", parent.fk)` exists
+   * AND the parent of `value` shares that FK value. Walks one hop on the
+   * parent — must stay in sync with `collapseGroup` in
+   * `CompoundIndexFetcher.ts`. If the rewriter ever recurses (e.g. to
+   * `taskId.projectId.workspaceId`), this loop needs the same recursion
+   * or covered reads will silently miss and re-fetch.
+   *
+   * Skipped (returns false) when:
+   *   - `indexKey` is already a dotted path (we only check direct keys)
+   *   - the FK's referent model isn't registered
+   *   - `value`'s parent isn't in the pool
+   *   - no outgoing FK on the parent has a matching compound coverage
+   */
+  private isCoveredByCompound(
+    modelName: string,
+    indexKey: string,
+    value: string,
+  ): boolean {
+    if (indexKey.includes(".")) {
+      return false;
+    }
+    const childMeta = ModelRegistry.getModelMeta(modelName);
+    const fkProp = childMeta?.properties.get(indexKey);
+    if (fkProp?.type !== PropertyType.Reference || fkProp.referenceTo == null) {
+      return false;
+    }
+    const parent = this.objectPool.getById(fkProp.referenceTo, value);
+    if (parent == null) {
+      return false;
+    }
+    const parentMeta = ModelRegistry.getModelMeta(fkProp.referenceTo);
+    if (parentMeta == null) {
+      return false;
+    }
+    for (const prop of parentMeta.properties.values()) {
+      if (prop.type !== PropertyType.Reference || prop.referenceTo == null) {
+        continue;
+      }
+      const v = readFk(parent, prop.name);
+      if (v == null) {
+        continue;
+      }
+      const compoundKey = StoreManager.collectionKey(
+        modelName,
+        `${indexKey}.${prop.name}`,
+        v,
+      );
+      if (this.partialIndexCoverage.has(compoundKey)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** Mark a `(modelName, indexKey, value)` query as fully covered locally as
    * of `firstSyncId`. Updates the in-memory hot cache and the storage
    * adapter's persistent store. */
@@ -1465,6 +1531,31 @@ export class StoreManager {
       indexKey,
       value,
       firstSyncId,
+    );
+  }
+
+  /**
+   * Absorb the response from a synthetic compound query produced by
+   * `wrapCompoundFetcher`. The full response bag is written to IDB so
+   * future direct lookups within the compound's coverage area find their
+   * records — `BatchModelLoader.flush` only delivers per-waiter slices,
+   * which would otherwise drop records for parents that weren't in the
+   * original batch. The compound key itself is recorded in
+   * `partialIndexCoverage` so derive-on-read can short-circuit subsequent
+   * direct loads.
+   */
+  private async absorbCompoundResponse(
+    compound: { modelName: string; indexKey: string; value: string },
+    bag: Record<string, unknown>[],
+  ): Promise<void> {
+    const meta = ModelRegistry.getModelMeta(compound.modelName);
+    if (meta?.loadStrategy !== LoadStrategy.Ephemeral && bag.length > 0) {
+      await this.database.writeModels(compound.modelName, bag);
+    }
+    await this.markPartialIndexLoaded(
+      compound.modelName,
+      compound.indexKey,
+      compound.value,
     );
   }
 

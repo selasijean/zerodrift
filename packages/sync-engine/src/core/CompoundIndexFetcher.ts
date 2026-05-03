@@ -30,15 +30,40 @@ export const COMPOUND_FETCH_THRESHOLD = 5;
  * batches into compound queries before invoking `inner`. The returned
  * fetcher has the same shape — `BatchModelLoader` doesn't know whether
  * collapse happened.
+ *
+ * `onCompoundFetched` (optional) fires once per synthetic compound query
+ * after `inner` resolves successfully, with the per-model response bag.
+ * Used by `StoreManager` to (a) write the full bag to IDB so future
+ * direct lookups inside the compound's coverage area find their records,
+ * and (b) record the compound key in `partialIndexCoverage` so
+ * derive-on-read can short-circuit subsequent direct loads.
  */
 export function wrapCompoundFetcher(
   inner: IndexBatchFetcher,
   pool: ObjectPool,
-  threshold: number = COMPOUND_FETCH_THRESHOLD,
+  options: {
+    threshold?: number;
+    onCompoundFetched?: (
+      compound: IndexQuery,
+      bagForModel: Record<string, unknown>[],
+    ) => void | Promise<void>;
+  } = {},
 ): IndexBatchFetcher {
+  const threshold = options.threshold ?? COMPOUND_FETCH_THRESHOLD;
   return async (queries) => {
     const collapsed = collapseQueries(queries, pool, threshold);
-    return inner(collapsed);
+    const result = await inner(collapsed);
+    if (options.onCompoundFetched != null) {
+      // A compound query is the synthetic kind we added during collapse —
+      // it has a dotted `indexKey`. (Adopters never originate dotted-path
+      // queries themselves; only this collapser does.)
+      for (const q of collapsed) {
+        if (q.indexKey.includes(".")) {
+          await options.onCompoundFetched(q, result[q.modelName] ?? []);
+        }
+      }
+    }
+    return result;
   };
 }
 
@@ -91,7 +116,10 @@ export function collapseQueries(
  * (Task → projectId → Project → workspaceId), enabling
  * `Comment[taskId.projectId.workspaceId=W]`. The dotted-path API on the
  * server already supports this; the rewrite logic here would need to
- * compose the path. */
+ * compose the path. If you change the depth here, also update
+ * `StoreManager.isCoveredByCompound` — its derive-on-read walks the
+ * same depth and must stay in sync, otherwise reads silently miss
+ * coverage that the rewriter is now emitting. */
 function collapseGroup(
   bucket: IndexQuery[],
   pool: ObjectPool,
