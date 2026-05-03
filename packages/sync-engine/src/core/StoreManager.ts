@@ -262,10 +262,10 @@ export class StoreManager {
   private stopped = false;
 
   /**
-   * Tracks collections that have been loaded into the pool this session.
-   * Key format: "ModelName:indexKey:value" (e.g. "Comment:issueId:abc").
-   * Serves two purposes: gates repeat server fetches and signals SyncConnection
-   * whether SSE inserts should be hydrated into the pool immediately.
+   * Hot cache of collection coverage. Backed by the storage adapter's
+   * `__partialIndexes` store, so coverage survives reload — the cache is
+   * populated from disk during bootstrap and updated on every successful
+   * `loadCollection`. Key format: "ModelName:indexKey:value".
    */
   private loadedCollections = new Set<string>();
   private loadedIds = new Set<string>();
@@ -352,6 +352,24 @@ export class StoreManager {
       await this.database.connect();
       if (this.stopped) {
         return;
+      }
+
+      // Hydrate the in-memory partial-index cache from the persistent store.
+      // Survives reload: coverage recorded in earlier sessions is reused, so
+      // already-fetched scoped queries don't re-hit the server. Failure here
+      // is non-fatal — the cache stays empty and we re-fetch on demand.
+      try {
+        for (const entry of await this.database.loadPartialIndexes()) {
+          this.loadedCollections.add(
+            StoreManager.collectionKey(
+              entry.modelName,
+              entry.indexKey,
+              entry.value,
+            ),
+          );
+        }
+      } catch (err) {
+        this.emitError(err, { kind: "deferredBootstrap", modelNames: [] });
       }
 
       this.setPhase(BootstrapPhase.DeterminingBootstrapType);
@@ -1282,7 +1300,7 @@ export class StoreManager {
       }
     }
 
-    this.loadedCollections.add(key);
+    await this.markPartialIndexLoaded(modelName, indexKey, value);
     return results;
   }
 
@@ -1294,6 +1312,19 @@ export class StoreManager {
     return this.loadedCollections.has(
       StoreManager.collectionKey(modelName, indexKey, value),
     );
+  }
+
+  /** Mark a `(modelName, indexKey, value)` query as fully covered locally —
+   * both in the in-memory cache and the storage adapter's persistent store. */
+  private async markPartialIndexLoaded(
+    modelName: string,
+    indexKey: string,
+    value: string,
+  ): Promise<void> {
+    this.loadedCollections.add(
+      StoreManager.collectionKey(modelName, indexKey, value),
+    );
+    await this.database.recordPartialIndex(modelName, indexKey, value);
   }
 
   // ── Eviction helpers ──────────────────────────────────────────────────────
@@ -1351,6 +1382,7 @@ export class StoreManager {
     this.loadedCollections.delete(
       StoreManager.collectionKey(modelName, indexKey, value),
     );
+    await this.database.clearPartialIndex(modelName, indexKey, value);
   }
 
   /**
@@ -1509,7 +1541,6 @@ export class StoreManager {
       return [];
     }
 
-    const key = StoreManager.collectionKey(modelName, indexKey, value);
     const isEphemeral = meta.loadStrategy === LoadStrategy.Ephemeral;
 
     const previousIds = new Set(
@@ -1544,7 +1575,7 @@ export class StoreManager {
       }
     }
 
-    this.loadedCollections.add(key);
+    await this.markPartialIndexLoaded(modelName, indexKey, value);
     return results;
   }
 

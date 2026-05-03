@@ -86,6 +86,28 @@ export interface StorageAdapter {
   deleteCachedTransactions(keys: number[]): Promise<void>;
   clearCachedTransactions(): Promise<void>;
   /**
+   * Record that a `loadCollection(modelName, indexKey, value)` query has been
+   * fetched in full. Survives reload — on the next bootstrap the engine knows
+   * which scoped queries are already covered locally and can skip the server.
+   */
+  recordPartialIndex(
+    modelName: string,
+    indexKey: string,
+    value: string,
+  ): Promise<void>;
+  /** Clear coverage for a single (modelName, indexKey, value) tuple. */
+  clearPartialIndex(
+    modelName: string,
+    indexKey: string,
+    value: string,
+  ): Promise<void>;
+  /** Clear all coverage entries for a given model — used by schema migrations. */
+  clearPartialIndexesForModel(modelName: string): Promise<void>;
+  /** Read every recorded partial index. Called once at connect to populate the in-memory cache. */
+  loadPartialIndexes(): Promise<
+    Array<{ modelName: string; indexKey: string; value: string }>
+  >;
+  /**
    * Close the storage connection without deleting any data.
    * Called by StoreManager.teardown() during React unmount / cleanup.
    * Data is preserved for the next page load (enables faster partial bootstrap).
@@ -229,6 +251,11 @@ export class Database implements StorageAdapter {
     if (!db.objectStoreNames.contains("__transactions")) {
       db.createObjectStore("__transactions", { autoIncrement: true });
     }
+    if (!db.objectStoreNames.contains("__partialIndexes")) {
+      db.createObjectStore("__partialIndexes", {
+        keyPath: ["modelName", "indexKey", "value"],
+      });
+    }
     for (const modelMeta of ModelRegistry.allModels()) {
       this.createModelStore(db, modelMeta.name);
     }
@@ -242,6 +269,11 @@ export class Database implements StorageAdapter {
     }
     if (!db.objectStoreNames.contains("__transactions")) {
       db.createObjectStore("__transactions", { autoIncrement: true });
+    }
+    if (!db.objectStoreNames.contains("__partialIndexes")) {
+      db.createObjectStore("__partialIndexes", {
+        keyPath: ["modelName", "indexKey", "value"],
+      });
     }
 
     const registeredModels = new Set(
@@ -592,6 +624,64 @@ export class Database implements StorageAdapter {
     const tx = this.db.transaction("__transactions", "readwrite");
     tx.objectStore("__transactions").clear();
     return this.waitForTransaction(tx);
+  }
+
+  // =========================================================================
+  // Partial-index coverage store
+  //
+  // Records `(modelName, indexKey, value)` triples for which loadCollection has
+  // fetched in full. Survives reload — on next bootstrap the engine populates
+  // its in-memory cache from this store and skips redundant network/IDB work.
+  // =========================================================================
+
+  async recordPartialIndex(
+    modelName: string,
+    indexKey: string,
+    value: string,
+  ): Promise<void> {
+    if (this.db == null) {
+      return;
+    }
+    const tx = this.db.transaction("__partialIndexes", "readwrite");
+    tx.objectStore("__partialIndexes").put({ modelName, indexKey, value });
+    return this.waitForTransaction(tx);
+  }
+
+  async clearPartialIndex(
+    modelName: string,
+    indexKey: string,
+    value: string,
+  ): Promise<void> {
+    if (this.db == null) {
+      return;
+    }
+    const tx = this.db.transaction("__partialIndexes", "readwrite");
+    tx.objectStore("__partialIndexes").delete([modelName, indexKey, value]);
+    return this.waitForTransaction(tx);
+  }
+
+  async clearPartialIndexesForModel(modelName: string): Promise<void> {
+    if (this.db == null) {
+      return;
+    }
+    const tx = this.db.transaction("__partialIndexes", "readwrite");
+    // IDB delete accepts a key range — drops every entry whose first compound
+    // component is `modelName` in a single op.
+    tx.objectStore("__partialIndexes").delete(
+      IDBKeyRange.bound([modelName], [modelName, []], false, false),
+    );
+    return this.waitForTransaction(tx);
+  }
+
+  async loadPartialIndexes(): Promise<
+    Array<{ modelName: string; indexKey: string; value: string }>
+  > {
+    if (this.db == null) {
+      return [];
+    }
+    return this.idbGetAll("__partialIndexes") as Promise<
+      Array<{ modelName: string; indexKey: string; value: string }>
+    >;
   }
 
   // =========================================================================

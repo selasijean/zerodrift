@@ -21,6 +21,8 @@ export class MemoryAdapter implements StorageAdapter {
   private txLog: { key: number; data: unknown }[] = [];
   private nextKey = 1;
   private connected = false;
+  /** modelName → indexKey → set of recorded values. */
+  private partialIndexes = new Map<string, Map<string, Set<string>>>();
 
   async connect(): Promise<void> {
     this.connected = true;
@@ -157,6 +159,51 @@ export class MemoryAdapter implements StorageAdapter {
     this.txLog = [];
   }
 
+  async recordPartialIndex(
+    modelName: string,
+    indexKey: string,
+    value: string,
+  ): Promise<void> {
+    let byModel = this.partialIndexes.get(modelName);
+    if (byModel == null) {
+      byModel = new Map();
+      this.partialIndexes.set(modelName, byModel);
+    }
+    let byKey = byModel.get(indexKey);
+    if (byKey == null) {
+      byKey = new Set();
+      byModel.set(indexKey, byKey);
+    }
+    byKey.add(value);
+  }
+
+  async clearPartialIndex(
+    modelName: string,
+    indexKey: string,
+    value: string,
+  ): Promise<void> {
+    this.partialIndexes.get(modelName)?.get(indexKey)?.delete(value);
+  }
+
+  async clearPartialIndexesForModel(modelName: string): Promise<void> {
+    this.partialIndexes.delete(modelName);
+  }
+
+  async loadPartialIndexes(): Promise<
+    Array<{ modelName: string; indexKey: string; value: string }>
+  > {
+    const out: Array<{ modelName: string; indexKey: string; value: string }> =
+      [];
+    for (const [modelName, byKey] of this.partialIndexes) {
+      for (const [indexKey, values] of byKey) {
+        for (const value of values) {
+          out.push({ modelName, indexKey, value });
+        }
+      }
+    }
+    return out;
+  }
+
   async close(): Promise<void> {
     this.connected = false;
   }
@@ -167,5 +214,6 @@ export class MemoryAdapter implements StorageAdapter {
     this.meta = null;
     this.nextKey = 1;
     this.connected = false;
+    this.partialIndexes.clear();
   }
 }
