@@ -250,6 +250,8 @@ const teamADrivers = await sm.getOrLoadAll<DriverModel>("DriverModel", {
 
 `getOrLoadById` / `getOrLoadByIds` / `getOrLoadCollection` are aliases of the older `loadOne` / `loadByIds` / `loadCollection` — both shapes ship for backwards compatibility. `getOrLoadAll` is new; per-strategy: Instant + Ephemeral return the pool snapshot directly (already fully resident); Lazy / Partial / ExplicitlyRequested fetch from the server; Local reads from IDB. Coverage is tracked under a reserved `"*"` sentinel key in the partial-index store, scoped per `syncGroups` set so different scopes are cached independently.
 
+For Storybook / test fixtures, two pool-only seed helpers (`sm.seed(modelName, records)` / `sm.seedMany({...})`) accept the same shape as `bootstrapFetcher`'s `models` response — see [`agent-docs/08-react-integration.md`](agent-docs/08-react-integration.md#storybook--testing) for the full pattern.
+
 ### Refreshing stale data
 
 When a long-lived agent reconnects after a stream gap, three APIs re-fetch from the server while preserving object identity (existing references see updated values, not new objects):

@@ -1961,6 +1961,43 @@ export class StoreManager {
     return this.objectPool.getAll<T>(modelName);
   }
 
+  // ── Test / Storybook seeding ─────────────────────────────────────────────
+  //
+  // Pool-only helpers for injecting fixtures without going through
+  // `bootstrapFetcher` or any I/O. The accepted shape mirrors
+  // `BootstrapResponse.models` so adopters can paste fixtures from one to
+  // the other. Re-seeding the same id is idempotent — `hydrateAndPut`
+  // re-hydrates in place rather than constructing a new instance.
+  //
+  // No IDB write, no `partialIndexCoverage` mutation, no `loadedModels`
+  // change. Adopters who want "this collection is fully covered, don't
+  // refetch on subsequent loadCollection" can additionally call
+  // `loadCollection` with a no-op fetcher to mark coverage.
+
+  /** Hydrate `records` into the pool as instances of `modelName` and
+   * return them. Skips any record whose model isn't registered.
+   * Intended for stories and tests, not production. */
+  seed<T extends BaseModel = BaseModel>(
+    modelName: string,
+    records: Record<string, unknown>[],
+  ): T[] {
+    const meta = ModelRegistry.getModelMeta(modelName);
+    if (meta == null) {
+      return [];
+    }
+    return records.map(
+      (record) => this.objectPool.hydrateAndPut(modelName, meta, record) as T,
+    );
+  }
+
+  /** Bulk seed: takes the same shape as `BootstrapResponse.models`. Useful
+   * for one-shot story setup that hydrates a graph in one call. */
+  seedMany(modelsByName: Record<string, Record<string, unknown>[]>): void {
+    for (const [modelName, records] of Object.entries(modelsByName)) {
+      this.seed(modelName, records);
+    }
+  }
+
   // ── Refresh ──────────────────────────────────────────────────────────────
 
   /**

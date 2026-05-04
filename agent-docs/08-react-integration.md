@@ -145,3 +145,78 @@ sm.batch(() => {
 All hooks return empty/null data fields before `status.phase === Ready`. This prevents rendering stale or empty states during bootstrap. `useModels` returns `{ items: [], … }`, `useModel` returns `{ item: null, … }`, and so on — the wrapper shape is always present.
 
 The `SyncProvider`'s `fallback` prop handles showing a loading state during bootstrap. Once `Ready`, the fallback is replaced with the app tree, and all hooks return live data.
+
+## Storybook / testing
+
+Two patterns for rendering components that depend on `<SyncProvider>` without hitting a real backend.
+
+### Pattern A — declarative fixtures via `bootstrapFetcher`
+
+Best when each story has a stable fixture set. The mock data flows through the normal bootstrap path, so coverage state, loaded-models tracking, and IDB are all consistent with a real session.
+
+```tsx
+import { SyncProvider } from "sync-engine/react";
+import { MemoryAdapter } from "sync-engine";
+import "./models";
+
+export const Default = {
+  decorators: [
+    (Story) => (
+      <SyncProvider config={{
+        workspaceId: "story",
+        storageAdapter: new MemoryAdapter(),
+        bootstrapFetcher: async () => ({
+          lastSyncId: 0,
+          subscribedSyncGroups: [],
+          models: {
+            Issue: [{ id: "i1", title: "Story issue", teamId: "t1" }],
+            Team:  [{ id: "t1", name: "Story team" }],
+          },
+        }),
+        // syncUrl omitted → no SSE connection.
+      }} fallback={null}>
+        <Story />
+      </SyncProvider>
+    ),
+  ],
+};
+```
+
+### Pattern B — imperative seed via `sm.seed`
+
+Best for stories that mutate pool state mid-render or want to compose fixtures from other sources. `sm.seed(modelName, records)` and `sm.seedMany({Name: [...]})` accept the same shape as `bootstrapFetcher`'s `models` field — fixtures are portable between the two patterns.
+
+```tsx
+import { useEffect } from "react";
+import { useSyncEngine, SyncProvider } from "sync-engine/react";
+import { MemoryAdapter } from "sync-engine";
+
+function Seed({ children }: { children: React.ReactNode }) {
+  const { sm } = useSyncEngine();
+  useEffect(() => {
+    sm.seedMany({
+      Issue: [{ id: "i1", title: "Updated mid-story", teamId: "t1" }],
+      Team:  [{ id: "t1", name: "Engineering" }],
+    });
+  }, [sm]);
+  return <>{children}</>;
+}
+
+export const Default = {
+  decorators: [
+    (Story) => (
+      <SyncProvider config={{
+        workspaceId: "story",
+        storageAdapter: new MemoryAdapter(),
+        bootstrapFetcher: async () => ({
+          lastSyncId: 0, subscribedSyncGroups: [], models: {},
+        }),
+      }} fallback={null}>
+        <Seed><Story /></Seed>
+      </SyncProvider>
+    ),
+  ],
+};
+```
+
+`seed` / `seedMany` are pool-only — no IDB write, no `partialIndexCoverage` mutation, no `loadedModels` change. Re-seeding the same id re-hydrates the existing instance in place (preserves identity, so observers don't tear).
