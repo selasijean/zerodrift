@@ -1,0 +1,208 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createDb,
+  defineSchema,
+  entity,
+  link,
+  s,
+  LoadStrategy,
+} from "@sync-engine/schema";
+import { BaseModel } from "@sync-engine/BaseModel";
+import { MemoryAdapter } from "@sync-engine/MemoryAdapter";
+import { StoreManager } from "@sync-engine/StoreManager";
+
+const dbSchema = defineSchema({
+  entities: {
+    dbTeam: entity({
+      loadStrategy: LoadStrategy.Instant,
+      fields: {
+        id: s.id(),
+        name: s.string(),
+      },
+    }),
+    dbIssue: entity({
+      loadStrategy: LoadStrategy.Instant,
+      fields: {
+        id: s.id(),
+        title: s.string().default(""),
+        sortOrder: s.number().default(0),
+        teamId: s.refId("dbTeam").nullable().indexed(),
+      },
+    }),
+  },
+  links: {
+    issueTeam: link({
+      from: { entity: "dbIssue", field: "teamId", as: "team" },
+      to: { entity: "dbTeam", many: "issues", lazy: true },
+      onDelete: "cascade",
+    }),
+  },
+});
+
+let sm: StoreManager;
+let db: ReturnType<typeof createDb<typeof dbSchema>>;
+
+beforeEach(async () => {
+  BaseModel.storeManager = null;
+  sm = new StoreManager({
+    workspaceId: crypto.randomUUID(),
+    storageAdapter: new MemoryAdapter(),
+    bootstrapFetcher: vi.fn().mockResolvedValue({
+      lastSyncId: 0,
+      subscribedSyncGroups: [],
+      models: {},
+    }),
+  });
+  await sm.database.connect();
+  db = createDb({ schema: dbSchema, storeManager: sm });
+});
+
+afterEach(async () => {
+  BaseModel.storeManager = null;
+  await sm.teardown();
+});
+
+// ---------------------------------------------------------------------------
+// createDb shape
+// ---------------------------------------------------------------------------
+
+describe("createDb — shape", () => {
+  it("exposes one namespace per entity key", () => {
+    expect(typeof db.dbTeam.findById).toBe("function");
+    expect(typeof db.dbTeam.create).toBe("function");
+    expect(typeof db.dbTeam.update).toBe("function");
+    expect(typeof db.dbTeam.delete).toBe("function");
+
+    expect(typeof db.dbIssue.findById).toBe("function");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findById
+// ---------------------------------------------------------------------------
+
+describe("createDb — findById", () => {
+  it("returns null when no record is in the pool", () => {
+    expect(db.dbTeam.findById("missing")).toBeNull();
+  });
+
+  it("returns the pooled record after create", () => {
+    const team = db.dbTeam.create({ id: "team-1", name: "Engineering" });
+    expect(db.dbTeam.findById("team-1")).toBe(team);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// create
+// ---------------------------------------------------------------------------
+
+describe("createDb — create", () => {
+  it("returns an instance whose fields reflect the input", () => {
+    const team = db.dbTeam.create({ id: "team-create-1", name: "Design" });
+    expect(team.id).toBe("team-create-1");
+    expect(team.name).toBe("Design");
+  });
+
+  it("auto-generates id when input omits it", () => {
+    const team = db.dbTeam.create({ name: "Auto" });
+    expect(typeof team.id).toBe("string");
+    expect(team.id.length).toBeGreaterThan(0);
+  });
+
+  it("applies field defaults for omitted properties", () => {
+    const issue = db.dbIssue.create({ id: "issue-1", teamId: null });
+    expect(issue.title).toBe("");
+    expect(issue.sortOrder).toBe(0);
+  });
+
+  it("enqueues a create transaction on the StoreManager", () => {
+    expect(sm.transactionQueue.pendingCount).toBe(0);
+    db.dbTeam.create({ id: "team-tx", name: "Sales" });
+    expect(sm.transactionQueue.pendingCount).toBe(1);
+  });
+
+  it("places the record in the object pool", () => {
+    db.dbTeam.create({ id: "team-pool", name: "Ops" });
+    const fromPool = sm.objectPool.getById("DbTeam", "team-pool");
+    expect(fromPool).not.toBeUndefined();
+    expect((fromPool as unknown as { name: string }).name).toBe("Ops");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// update
+// ---------------------------------------------------------------------------
+
+describe("createDb — update", () => {
+  it("applies a partial update and enqueues a transaction", () => {
+    const team = db.dbTeam.create({ id: "team-up", name: "Old" });
+    const before = sm.transactionQueue.pendingCount;
+
+    db.dbTeam.update("team-up", { name: "New" });
+
+    expect(team.name).toBe("New");
+    expect(sm.transactionQueue.pendingCount).toBe(before + 1);
+  });
+
+  it("throws when the record is not in the pool", () => {
+    expect(() => db.dbTeam.update("ghost", { name: "x" })).toThrow(
+      /no record with id "ghost"/,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// delete
+// ---------------------------------------------------------------------------
+
+describe("createDb — delete", () => {
+  it("removes the record from the pool and enqueues a delete", () => {
+    db.dbTeam.create({ id: "team-del", name: "Doomed" });
+    const before = sm.transactionQueue.pendingCount;
+
+    db.dbTeam.delete("team-del");
+
+    expect(sm.objectPool.getById("DbTeam", "team-del")).toBeUndefined();
+    expect(sm.transactionQueue.pendingCount).toBeGreaterThan(before);
+  });
+
+  it("cascades through onDelete: cascade links", () => {
+    db.dbTeam.create({ id: "team-cascade", name: "Casc" });
+    db.dbIssue.create({
+      id: "issue-cascade",
+      teamId: "team-cascade",
+    });
+    expect(db.dbIssue.findById("issue-cascade")).not.toBeNull();
+
+    db.dbTeam.delete("team-cascade");
+
+    expect(db.dbIssue.findById("issue-cascade")).toBeNull();
+    expect(db.dbTeam.findById("team-cascade")).toBeNull();
+  });
+
+  it("throws when the record is not in the pool", () => {
+    expect(() => db.dbTeam.delete("ghost")).toThrow(
+      /no record with id "ghost"/,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Singular relation accessor (compiled from `link(...)`)
+// ---------------------------------------------------------------------------
+
+describe("createDb — singular relations resolve via the pool", () => {
+  it("issue.team returns the team after both records are in the pool", () => {
+    const team = db.dbTeam.create({ id: "team-rel", name: "Linked" });
+    const issue = db.dbIssue.create({
+      id: "issue-rel",
+      teamId: "team-rel",
+    });
+    expect(issue.team).toBe(team);
+  });
+
+  it("issue.team is null when teamId is null", () => {
+    const issue = db.dbIssue.create({ id: "issue-detached", teamId: null });
+    expect(issue.team).toBeNull();
+  });
+});

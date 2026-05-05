@@ -301,15 +301,35 @@ describe("self-referential links", () => {
 // ---------------------------------------------------------------------------
 
 describe("InferCreateInput / InferUpdateInput", () => {
-  it("create input includes raw fields without relation properties", () => {
+  it("required fields are required and have field types", () => {
     type CreateIssue = InferCreateInput<Schema, "issue">;
     expectTypeOf<CreateIssue["title"]>().toEqualTypeOf<string>();
-    expectTypeOf<CreateIssue["teamId"]>().toEqualTypeOf<string | null>();
+    expectTypeOf<CreateIssue["sortOrder"]>().toEqualTypeOf<number>();
+    expectTypeOf<CreateIssue["creatorId"]>().toEqualTypeOf<string>();
+  });
+
+  it("nullable / defaulted / id-kind fields are optional", () => {
+    type CreateIssue = InferCreateInput<Schema, "issue">;
+    // nullable
+    expectTypeOf<CreateIssue["teamId"]>().toEqualTypeOf<
+      string | null | undefined
+    >();
+    // defaulted
+    expectTypeOf<CreateIssue["description"]>().toEqualTypeOf<
+      string | undefined
+    >();
+    expectTypeOf<CreateIssue["priority"]>().toEqualTypeOf<number | undefined>();
+    // id-kind: BaseModel auto-assigns
+    expectTypeOf<CreateIssue["id"]>().toEqualTypeOf<string | undefined>();
+  });
+
+  it("relation properties never appear in create input", () => {
+    type CreateIssue = InferCreateInput<Schema, "issue">;
     expectTypeOf<CreateIssue>().not.toHaveProperty("team");
     expectTypeOf<CreateIssue>().not.toHaveProperty("issues");
   });
 
-  it("update input is a partial of create input", () => {
+  it("update input is a partial of the field set", () => {
     type UpdateIssue = InferUpdateInput<Schema, "issue">;
     expectTypeOf<UpdateIssue["title"]>().toEqualTypeOf<string | undefined>();
     expectTypeOf<UpdateIssue["teamId"]>().toEqualTypeOf<

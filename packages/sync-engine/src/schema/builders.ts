@@ -20,7 +20,10 @@ function makeBuilder<T, M extends FieldMeta>(meta: M): FieldBuilder<T, M> {
       return makeBuilder<T, M>({ ...meta, indexed: true });
     },
     default(value: T) {
-      return makeBuilder<T, M>({ ...meta, default: value });
+      return makeBuilder<T, Omit<M, "default"> & { default: T }>({
+        ...meta,
+        default: value,
+      } as Omit<M, "default"> & { default: T });
     },
     ephemeral() {
       return makeBuilder<T, M>({ ...meta, ephemeral: true });

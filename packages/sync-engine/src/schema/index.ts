@@ -6,6 +6,8 @@ export { defineSchema, entity, link, fields } from "./builders";
 export { fields as s } from "./builders";
 export { compileSchema } from "./compile";
 export type { CompiledSchema } from "./compile";
+export { createDb } from "./createDb";
+export type { Db, EntityNamespace } from "./createDb";
 
 export type {
   EntityDef,

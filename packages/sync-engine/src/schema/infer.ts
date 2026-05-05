@@ -114,10 +114,32 @@ type ReverseCollections<S extends SchemaDef, K extends EntityKey<S>> = {
 export type InferEntity<S extends SchemaDef, K extends EntityKey<S>> =
   EntityFieldTypes<S, K> & SingularRelations<S, K> & ReverseCollections<S, K>;
 
-export type InferCreateInput<
-  S extends SchemaDef,
-  K extends EntityKey<S>,
-> = EntityFieldTypes<S, K>;
+/**
+ * A create-input field is optional when the runtime can fill it without
+ * the caller: id-kind (BaseModel auto-assigns a UUID), defaulted fields,
+ * and nullable fields (`undefined` is treated as null on hydrate).
+ */
+type IsOptionalCreateField<F> = F extends FieldBuilder<infer T, infer M>
+  ? M extends { kind: "id" } | { default: unknown }
+    ? true
+    : null extends T
+      ? true
+      : false
+  : false;
+
+export type InferCreateInput<S extends SchemaDef, K extends EntityKey<S>> = {
+  [P in keyof EntityFieldsRecord<S, K> as IsOptionalCreateField<
+    EntityFieldsRecord<S, K>[P]
+  > extends true
+    ? never
+    : P]: FieldType<EntityFieldsRecord<S, K>[P]>;
+} & {
+  [P in keyof EntityFieldsRecord<S, K> as IsOptionalCreateField<
+    EntityFieldsRecord<S, K>[P]
+  > extends true
+    ? P
+    : never]?: FieldType<EntityFieldsRecord<S, K>[P]>;
+};
 
 export type InferUpdateInput<
   S extends SchemaDef,

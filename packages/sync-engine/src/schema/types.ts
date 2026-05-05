@@ -34,7 +34,7 @@ export interface FieldBuilder<T, M extends FieldMeta = FieldMeta> {
   readonly meta: M;
   nullable(): FieldBuilder<T | null, M>;
   indexed(): FieldBuilder<T, M>;
-  default(value: T): FieldBuilder<T, M>;
+  default(value: T): FieldBuilder<T, Omit<M, "default"> & { default: T }>;
   ephemeral(): FieldBuilder<T, M>;
   serialize(fn: (value: T) => unknown): FieldBuilder<T, M>;
   deserialize(fn: (raw: unknown) => T): FieldBuilder<T, M>;
