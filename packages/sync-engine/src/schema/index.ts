@@ -40,9 +40,7 @@ export type {
 
 export type {
   EntityKey,
-  FieldIsNullable,
-  FieldRefTarget,
-  FieldType,
+  IndexedFieldKeys,
   InferCreateInput,
   InferEntity,
   InferUpdateInput,

@@ -94,15 +94,22 @@ type MembersFromOne<
     : Record<never, never>
   : Record<never, never>;
 
-/** Walk a tuple of `ExtensionDescriptor`s and intersect every entry's members
- *  for the given entity key. Returns `{}` when the tuple is empty. */
+/**
+ * Distribute `MembersFromOne` over each element of the extensions tuple
+ * (via `Exts[number]`) and intersect the resulting union — same shape as a
+ * tuple-rest recursive walk but without the recursion depth, so schemas with
+ * many extension descriptors stay well below TS's instantiation limits.
+ */
+type UnionToIntersection<U> = (
+  U extends unknown ? (x: U) => void : never
+) extends (x: infer I) => void
+  ? I
+  : never;
+
 export type MergedExtensionMembers<
   S extends SchemaDef,
   K extends EntityKey<S>,
   Exts extends readonly ExtensionDescriptor<S>[],
-> = Exts extends readonly [
-  infer Head,
-  ...infer Tail extends readonly ExtensionDescriptor<S>[],
-]
-  ? MembersFromOne<S, K, Head> & MergedExtensionMembers<S, K, Tail>
-  : Record<never, never>;
+> = Exts extends readonly []
+  ? Record<never, never>
+  : UnionToIntersection<MembersFromOne<S, K, Exts[number]>>;

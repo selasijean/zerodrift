@@ -39,9 +39,18 @@ interface InverseDecl {
 
 type InverseLinkTarget = LazyCollectionBase | BackRef;
 
+/**
+ * Read a dynamic property off a model instance. The single bridge between
+ * the typed `BaseModel` shape and the index-string access we need for
+ * runtime field reflection (covering paths, predicate filters, etc.).
+ */
+export function prop(model: BaseModel, key: string): unknown {
+  return (model as unknown as Record<string, unknown>)[key];
+}
+
 /** Read a dynamic FK property off a model instance, or null if missing/empty. */
 export function readFk(instance: BaseModel, key: string): string | null {
-  const v = (instance as unknown as Record<string, unknown>)[key];
+  const v = prop(instance, key);
   return typeof v === "string" && v !== "" ? v : null;
 }
 

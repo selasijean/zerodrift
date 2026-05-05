@@ -1,20 +1,10 @@
 import type { EntityDef, FieldBuilder, FieldMeta, SchemaDef } from "./types";
 
-export type FieldType<F> = F extends FieldBuilder<infer T, FieldMeta>
-  ? T
-  : never;
+type FieldType<F> = F extends FieldBuilder<infer T, FieldMeta> ? T : never;
 
-export type FieldIsNullable<F> = null extends FieldType<F> ? true : false;
+type FieldIsNullable<F> = null extends FieldType<F> ? true : false;
 
-/** Extract the refId target literal, e.g. `"team"` from `s.refId("team")`. */
-export type FieldRefTarget<F> = F extends FieldBuilder<unknown, infer M>
-  ? M extends { kind: "refId"; refTarget: infer T extends string }
-    ? T
-    : never
-  : never;
-
-/** True when `.indexed()` was applied to the builder. */
-export type FieldIsIndexed<F> = F extends FieldBuilder<unknown, infer M>
+type FieldIsIndexed<F> = F extends FieldBuilder<unknown, infer M>
   ? M extends { indexed: true }
     ? true
     : false
@@ -39,7 +29,7 @@ export type IndexedFieldKeys<
 }[keyof EntityFieldsRecord<S, K>] &
   string;
 
-export type EntityFieldsRecord<
+type EntityFieldsRecord<
   S extends SchemaDef,
   K extends EntityKey<S>,
 > = S["entities"][K] extends EntityDef<infer F> ? F : never;

@@ -1,6 +1,7 @@
 import { action, computed } from "mobx";
 import type { BaseModel } from "../core/BaseModel";
 import { ModelRegistry } from "../core/ModelRegistry";
+import { prop } from "../core/ObjectPool";
 import {
   installActionMethod,
   installComputedAccessor,
@@ -485,7 +486,7 @@ function createEntityNamespace(
     watchByIndex(key, value, cb) {
       return sm.objectPool.subscribe(
         registryName,
-        (m) => (m as unknown as Record<string, unknown>)[key] === value,
+        (m) => prop(m, key) === value,
         cb,
       );
     },

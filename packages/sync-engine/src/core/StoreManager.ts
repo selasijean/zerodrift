@@ -21,7 +21,7 @@
 
 import { ModelRegistry } from "./ModelRegistry";
 import { DEFAULT_TRANSIENT_INDEX_DEPTH } from "./types";
-import { ObjectPool, readFk } from "./ObjectPool";
+import { ObjectPool, prop, readFk } from "./ObjectPool";
 import {
   Database,
   BootstrapType,
@@ -69,9 +69,6 @@ import {
   type EngineErrorHandler,
 } from "./types";
 
-function prop(model: BaseModel, key: string): unknown {
-  return (model as unknown as Record<string, unknown>)[key];
-}
 
 /**
  * Thrown when a delete/archive is blocked by an onDelete: "restrict" relationship.
