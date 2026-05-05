@@ -116,9 +116,8 @@ describe("schema ↔ decorator coexistence", () => {
   });
 
   it("schema-owned FK targets the decorator class by registry name", () => {
-    const authorId = ModelRegistry.getModelMeta(
-      "CoexComment",
-    )!.properties.get("authorId");
+    const authorId =
+      ModelRegistry.getModelMeta("CoexComment")!.properties.get("authorId");
     expect(authorId?.type).toBe(PropertyType.Reference);
     expect(authorId?.referenceTo).toBe("CoexUser");
     expect(authorId?.onDelete).toBe("cascade");
@@ -194,4 +193,3 @@ describe("external entity validation", () => {
     ).toThrow(/external: true requires an explicit name/);
   });
 });
-

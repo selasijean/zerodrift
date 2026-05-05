@@ -206,3 +206,43 @@ describe("createDb — singular relations resolve via the pool", () => {
     expect(issue.team).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// seed
+// ---------------------------------------------------------------------------
+
+describe("createDb — seed", () => {
+  it("hydrates records into the pool without enqueuing transactions", () => {
+    const before = sm.transactionQueue.pendingCount;
+    const seeded = db.dbTeam.seed([
+      { id: "team-seed-1", name: "Seeded A" },
+      { id: "team-seed-2", name: "Seeded B" },
+    ]);
+
+    expect(seeded).toHaveLength(2);
+    expect(seeded[0].name).toBe("Seeded A");
+    expect(db.dbTeam.findById("team-seed-1")).toBe(seeded[0]);
+    expect(sm.transactionQueue.pendingCount).toBe(before);
+  });
+
+  it("re-seeding the same id refreshes that instance in place", () => {
+    const [first] = db.dbTeam.seed([{ id: "team-seed-3", name: "v1" }]);
+    const [second] = db.dbTeam.seed([{ id: "team-seed-3", name: "v2" }]);
+
+    expect(second).toBe(first);
+    expect(second.name).toBe("v2");
+  });
+
+  it("seeded relations resolve through the pool the same way create-d ones do", () => {
+    const [team] = db.dbTeam.seed([{ id: "team-seed-rel", name: "Link" }]);
+    const [issue] = db.dbIssue.seed([
+      {
+        id: "issue-seed-rel",
+        title: "via seed",
+        sortOrder: 0,
+        teamId: "team-seed-rel",
+      },
+    ]);
+    expect(issue.team).toBe(team);
+  });
+});

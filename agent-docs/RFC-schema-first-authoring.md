@@ -455,19 +455,20 @@ Build:
 - `compileSchema` → `ModelRegistry`, with the cross-validation invariants enforced
 - `InferEntity`, `InferCreateInput`, `InferUpdateInput`, `InferRecord`
 - `createDb({ schema, extensions, adapter, sync })`
-- `db.<entity>.findById` / `create` / `update` / `delete`
+- `db.<entity>.findById` / `create` / `update` / `delete` / `seed`
 - `extend(...)` in both per-entity and whole-schema forms
-- One worked example: `Team` + `Issue` from existing test fixtures, behind a feature flag, decorators untouched
+- `entity({ external: true, name: "..." })` for coexistence with decorator-registered models
+- `fromZod(zodSchema)` and `entityFromZod(zodObject, opts)` — Zod is an optional peer dependency; the adapter walks Zod's `_zod.def` introspection and maps primitives + `nullable` / `optional` / `default` modifiers, falling through to `s.json<T>()` for structured types
+- One worked example: `Team` + `Issue` schemas exercised through `__tests__/Schema*.test.ts`
 
 Defer:
 
 - `db.<entity>.query(...)` — design the where/include/orderBy surface in a follow-up, it's independent
 - Top-level multi-entity InstaQL document
 - OpenAPI → schema importer
-- Zod → schema importer / `s.fromZod`
 - Many-to-many through-table sugar
-- Seed/fixture helpers (`db.seed(...)`)
 - Generated devtools schema viewer
+- Decorator → schema reverse direction (a decorator class linking to a schema-owned entity)
 
 Each deferred item is independent of the others and of V1. None block the prototype.
 

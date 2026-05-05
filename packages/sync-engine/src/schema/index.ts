@@ -23,6 +23,9 @@ export type {
   MergedExtensionMembers,
 } from "./extend";
 
+export { fromZod, entityFromZod } from "./zod";
+export type { EntityFromZodOpts } from "./zod";
+
 export type {
   EntityDef,
   FieldBuilder,

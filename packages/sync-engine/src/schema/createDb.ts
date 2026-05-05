@@ -42,6 +42,14 @@ export interface EntityNamespace<
   update(id: string, input: InferUpdateInput<S, K>): void;
   /** Delete the record with full cascade / restrict semantics. */
   delete(id: string): void;
+  /**
+   * Hydrate records straight into the pool — no transactions enqueued, no
+   * IDB writes. Re-seeding an existing id refreshes that instance in place.
+   * For tests and stories, not production.
+   */
+  seed(
+    records: ReadonlyArray<Partial<InferCreateInput<S, K>>>,
+  ): ReadonlyArray<RecordWithExtensions<S, K, Exts>>;
 }
 
 export type Db<
@@ -184,6 +192,13 @@ function createEntityNamespace(
     delete(id) {
       const model = requireInstance(sm, registryName, id, "delete");
       sm.deleteModel(model);
+    },
+    seed(records) {
+      const seeded = sm.seed(
+        registryName,
+        records as Record<string, unknown>[],
+      );
+      return seeded.map(toRecord);
     },
   };
 }
