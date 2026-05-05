@@ -135,7 +135,7 @@ Both authoring paths compile to the same `ModelRegistry`, so a schema entity can
 
 ### Drive entities from a Zod schema
 
-If your record shapes already live as Zod schemas (e.g. validating server responses), `entityFromZod(...)` reuses them as the field source. Zod doesn't carry FK or index metadata — layer those on per-field via `opts.fields`:
+If your record shapes already live as Zod schemas (for example, schemas you also validate server responses with elsewhere), `entityFromZod(...)` reuses them as the field source. Zod doesn't carry FK or index metadata — layer those on per-field via `opts.fields`:
 
 ```ts
 import { z } from "zod";
@@ -152,7 +152,7 @@ const ZodIssue = z.object({
   id:       z.string(),
   title:    z.string().default(""),
   priority: z.number().default(0),
-  teamId:   z.string(),       // Zod can't model FK semantics
+  teamId:   z.string().nullable(), // Zod owns nullability; override adds FK metadata
   email:    z.string().nullable(),
 });
 
@@ -183,7 +183,7 @@ const schema = defineSchema({
 });
 ```
 
-Override keys are constrained to `keyof z.infer<Z>` so typos fail to compile. Zod stays the source of field shape and validation; `link(...)` stays the source of truth for the relationship graph.
+Override keys are constrained to `keyof z.infer<Z>` so typos fail to compile. Zod stays the source of field shape and TypeScript types here; `link(...)` stays the source of truth for the relationship graph, and you can still reuse the same Zod schemas for validation at your API boundaries.
 
 See [`agent-docs/11-schema-first-authoring.md`](agent-docs/11-schema-first-authoring.md) for the full reference.
 

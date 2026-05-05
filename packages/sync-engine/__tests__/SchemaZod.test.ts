@@ -3,12 +3,15 @@ import { z } from "zod";
 import {
   compileSchema,
   defineSchema,
+  entity,
   entityFromZod,
   fromZod,
   link,
   s,
   LoadStrategy,
+  type EntityFromZodOpts,
   type FieldBuilder,
+  type IndexedFieldKeys,
 } from "@sync-engine/schema";
 import { ModelRegistry } from "@sync-engine/ModelRegistry";
 import { PropertyType } from "@sync-engine/types";
@@ -304,13 +307,52 @@ describe("entityFromZod — per-field overrides", () => {
     expect(email.indexed).toBe(true);
   });
 
-  // Type-level: typos in the `fields` override map fail to compile.
+  // Type-level: typos in the `fields` override map fail to compile. The check
+  // happens at the call site through F's constraint — `EntityFromZodOpts<Z>`
+  // is the explicit single-generic form for users who pre-type their opts.
   it("constrains override keys to fields actually declared on the Zod object", () => {
     type FieldsArg = NonNullable<
-      Parameters<typeof entityFromZod<typeof ZodOverridable>>[1]["fields"]
+      EntityFromZodOpts<typeof ZodOverridable>["fields"]
     >;
     expectTypeOf<keyof FieldsArg>().toEqualTypeOf<
       "id" | "title" | "email" | "teamId" | "draftNote"
     >();
+  });
+
+  // Type-level: override metadata (.indexed(), refId target, etc.) propagates
+  // into the inferred EntityDef, so IndexedFieldKeys can extract the indexed
+  // fields and downstream APIs (db.<entity>.getByIndex / peekByIndex /
+  // useDbIndexedCollection) see them. Covers both override forms — the
+  // builder replacement (`teamId`) and the chain modifier (`email`).
+  it("propagates override metadata into the entity's TS type so IndexedFieldKeys works", () => {
+    const schema = defineSchema({
+      entities: {
+        team: entity({
+          loadStrategy: LoadStrategy.Instant,
+          fields: { id: s.id(), name: s.string() },
+        }),
+        issue: entityFromZod(
+          z.object({
+            id: z.string(),
+            teamId: z.string(),
+            email: z.string(),
+            title: z.string(),
+          }),
+          {
+            loadStrategy: LoadStrategy.Instant,
+            name: "PropagationIssue",
+            fields: {
+              teamId: s.refId("team").nullable().indexed(),
+              email: (b) => b.indexed(),
+            },
+          },
+        ),
+      },
+      links: {},
+    });
+    expect(() => compileSchema(schema)).not.toThrow();
+
+    type IssueIndexedKeys = IndexedFieldKeys<typeof schema, "issue">;
+    expectTypeOf<IssueIndexedKeys>().toEqualTypeOf<"teamId" | "email">();
   });
 });
