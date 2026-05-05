@@ -87,6 +87,9 @@ const { items: teamIssues } = useDbIndexedCollection(db.issue, "teamId", teamId)
 //                                                            ^^^^^^^^ autocompletes to
 //                                                                     fields actually
 //                                                                     marked .indexed().
+
+// Multi-value form — issues for any of these teams.
+const { items: myIssues } = useDbIndexedCollections(db.issue, "teamId", myTeamIds);
 ```
 
 Same return shape and reactivity contract as the string-keyed hooks (`{ item | items, isLoading, error, reload }`). Internally they extract the registry name from the namespace and delegate to `useModel` / `useModels` / `useIndexedCollection`, so the underlying `useSyncExternalStore + pool.subscribe` plumbing is identical — there's no separate runtime path.

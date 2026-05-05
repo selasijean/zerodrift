@@ -98,6 +98,21 @@ export interface EntityNamespace<
     value: string,
   ): Promise<ReadonlyArray<RecordWithExtensions<S, K, Exts>>>;
   /**
+   * Resolve every record matching any of `values` on a declared `.indexed()`
+   * field. Fans out one `getByIndex` call per value in parallel; the pool
+   * dedupes if records appear in multiple buckets. Records are returned in
+   * input-`values` order, with duplicates collapsed to first occurrence.
+   *
+   * If your backend supports compound index queries, opt in via
+   * `serverSupportsCompoundIndexKeys: true` + `onDemandIndexBatchFetcher` to
+   * collapse the fan-out into one server round-trip when the values share a
+   * parent FK. See `agent-docs/04-lazy-loading.md`.
+   */
+  getByIndexValues(
+    key: IndexedFieldKeys<S, K>,
+    values: readonly string[],
+  ): Promise<ReadonlyArray<RecordWithExtensions<S, K, Exts>>>;
+  /**
    * Resolve every record of this entity. Hydrates from IDB on first call,
    * relies on partial-index coverage and SSE deltas on subsequent calls.
    */
@@ -435,6 +450,26 @@ function createEntityNamespace(
     async getByIndex(key, value) {
       const list = await sm.loadCollection(registryName, key, value);
       return recordsFrom(list);
+    },
+    async getByIndexValues(key, values) {
+      // Fan out in parallel; loadCollection is a no-op for already-covered
+      // (key, value) pairs, so re-firing for stale buckets is cheap.
+      await Promise.all(
+        values.map((v) => sm.loadCollection(registryName, key, v)),
+      );
+      // After every bucket is loaded, walk the pool once per value to
+      // preserve input order, deduping records that match multiple values.
+      const seen = new Set<string>();
+      const out: BaseModel[] = [];
+      for (const v of values) {
+        for (const m of sm.peekByIndex(registryName, key, v)) {
+          if (!seen.has(m.id)) {
+            seen.add(m.id);
+            out.push(m);
+          }
+        }
+      }
+      return recordsFrom(out);
     },
     async getAll() {
       const list = await sm.getOrLoadAll(registryName);

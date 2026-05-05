@@ -145,11 +145,13 @@ The compiler enforces these invariants and rejects the schema otherwise:
 
 The default flavor is async (`get*`). The `peek*` family is the sync escape hatch for code that genuinely cannot await (render-time reads, synchronous assertions).
 
-| | id | by-index | all |
-|---|---|---|---|
-| **Sync, pool snapshot** | `peek` | `peekByIndex` | `peekAll` |
-| **Async, pool-or-fetch** | `get` | `getByIndex` | `getAll` |
-| **Async, force network** | `refresh` | `refreshByIndex` | `refreshAll` |
+| | id | by-index | by-index-values | all |
+|---|---|---|---|---|
+| **Sync, pool snapshot** | `peek` | `peekByIndex` | — | `peekAll` |
+| **Async, pool-or-fetch** | `get` | `getByIndex` | `getByIndexValues` | `getAll` |
+| **Async, force network** | `refresh` | `refreshByIndex` | — | `refreshAll` |
+
+`getByIndexValues(key, values[])` is the multi-value form — fans out one `getByIndex` call per value in parallel, dedupes, returns the union in input-`values` order. Useful for "issues for any of these teams" patterns. With `serverSupportsCompoundIndexKeys: true` + `onDemandIndexBatchFetcher` configured, the fan-out can collapse into one server round-trip when the values share a parent FK.
 
 ```typescript
 const issue = await db.issue.get(id);                  // pool-first; falls back to IDB / fetcher
@@ -340,12 +342,16 @@ import {
   useDbModel,
   useDbModels,
   useDbIndexedCollection,
+  useDbIndexedCollections,
 } from "sync-engine/react";
 
 const { item: issue } = useDbModel(db.issue, issueId);
 const { items: teams } = useDbModels(db.team);
 const { items: teamIssues } = useDbIndexedCollection(db.issue, "teamId", teamId);
 //                                                            ^^^^^^^^ autocompletes to indexed fields only
+
+// Multi-value form — issues for any of these teams.
+const { items: myIssues } = useDbIndexedCollections(db.issue, "teamId", myTeamIds);
 ```
 
 Same return shape as the existing `useModel` / `useModels` / `useIndexedCollection` (`{ item | items, isLoading, error, reload }`); the schema-typed hooks just infer the record type and indexed-key constraint from the namespace. Internally they extract the registry name and delegate to the same `useSyncExternalStore` machinery, so reactivity is identical.

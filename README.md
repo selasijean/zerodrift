@@ -20,7 +20,7 @@ You bring the backend. The client speaks a small three-endpoint protocol — imp
 |---|---|
 | `sync-engine` | `StoreManager`, `BaseModel`, decorators, `ObjectPool`, types. Vanilla TS — no React, no DOM. |
 | `sync-engine/schema` | `defineSchema`, `entity`, `link`, `s` (field builders), `extend`, `createDb`, Zod adapter (`fromZod` / `entityFromZod`). Schema-as-data authoring; produces a typed `db.<entity>.*` API. |
-| `sync-engine/react` | `<SyncProvider>` and hooks: `useModel`, `useModels`, `useIndexedCollection`, `useCollection`, `useBackRef`, `useUndoRedo`, `useBatch`, `useBootstrapStatus`. Schema-typed siblings: `useDbModel`, `useDbModels`, `useDbIndexedCollection`. |
+| `sync-engine/react` | `<SyncProvider>` and hooks: `useModel`, `useModels`, `useIndexedCollection`, `useIndexedCollections`, `useCollection`, `useBackRef`, `useUndoRedo`, `useBatch`, `useBootstrapStatus`. Schema-typed siblings: `useDbModel`, `useDbModels`, `useDbIndexedCollection`, `useDbIndexedCollections`. |
 
 ## Define your models
 
@@ -189,6 +189,9 @@ const { item: issue } = useDbModel(db.issue, issueId);
 const { items: teams } = useDbModels(db.team);
 const { items: teamIssues } = useDbIndexedCollection(db.issue, "teamId", teamId);
 //                                                            ^^^^^^^^ autocompletes to indexed fields only
+
+// Multi-value form — issues for any of these teams.
+const { items: myIssues } = useDbIndexedCollections(db.issue, "teamId", myTeamIds);
 ```
 
 Same return shape, same reactivity contract — the typed hooks are thin wrappers that resolve the registry name from the namespace and delegate to the string-keyed primitives.

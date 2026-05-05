@@ -323,6 +323,61 @@ export function useIndexedCollection<T extends BaseModel = BaseModel>(
   };
 }
 
+/** Reactive list of models matching ANY of `values` on a foreign-key index.
+ * Fans out `loadCollection` per value in parallel; coverage is tracked
+ * per `(name, indexKey, value)` so re-renders don't re-fetch buckets that
+ * are already covered. The `values` array is compared by content so inline
+ * literals don't trigger re-fetches.
+ *
+ * For one-round-trip multi-value fetches, configure `onDemandIndexBatchFetcher`
+ * + `serverSupportsCompoundIndexKeys: true` — see `agent-docs/04-lazy-loading.md`. */
+export function useIndexedCollections<T extends BaseModel = BaseModel>(
+  modelName: string,
+  indexKey: string,
+  values: readonly string[] | null | undefined,
+): LoaderItemsResult<T> {
+  const { sm, status } = useSyncEngine();
+  const ready = status.phase === BootstrapPhase.Ready;
+  const valuesKey = (values ?? []).join(",");
+  const hasValues = values != null && values.length > 0;
+
+  const all = usePoolSnapshot(modelName, () => sm.objectPool.getAll(modelName));
+
+  const items = useMemo(() => {
+    if (!hasValues) {
+      return [];
+    }
+    const set = new Set(values);
+    return all.filter((m) => {
+      const v = readFk(m, indexKey);
+      return v != null && set.has(v);
+    });
+    // valuesKey: content equality; array identity is unstable for inline literals.
+  }, [all, indexKey, valuesKey, hasValues]);
+
+  const { isLoading, error, reload } = useLoader(
+    async () => {
+      await Promise.all(
+        (values ?? []).map((v) => sm.loadCollection(modelName, indexKey, v)),
+      );
+    },
+    ready && hasValues,
+    `${modelName}:${indexKey}:${valuesKey}`,
+    () =>
+      hasValues &&
+      (values ?? []).some(
+        (v) => !sm.isCollectionLoaded(modelName, indexKey, v),
+      ),
+  );
+
+  return {
+    items: ready ? (items as T[]) : [],
+    isLoading,
+    error,
+    reload,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Batch and undo/redo
 // ---------------------------------------------------------------------------
@@ -549,5 +604,17 @@ export function useDbIndexedCollection<NS extends AnyNamespace>(
     entityNamespaceRegistryName(ns),
     indexKey,
     value,
+  ) as unknown as LoaderItemsResult<RecordOf<NS>>;
+}
+
+export function useDbIndexedCollections<NS extends AnyNamespace>(
+  ns: NS,
+  indexKey: IndexedKeysOf<NS>,
+  values: readonly string[] | null | undefined,
+): LoaderItemsResult<RecordOf<NS>> {
+  return useIndexedCollections(
+    entityNamespaceRegistryName(ns),
+    indexKey,
+    values,
   ) as unknown as LoaderItemsResult<RecordOf<NS>>;
 }

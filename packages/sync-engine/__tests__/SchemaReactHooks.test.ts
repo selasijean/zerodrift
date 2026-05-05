@@ -10,6 +10,7 @@ import {
 } from "@sync-engine/schema";
 import {
   useDbIndexedCollection,
+  useDbIndexedCollections,
   useDbModel,
   useDbModels,
 } from "../src/react/index";
@@ -74,6 +75,18 @@ describe("useDb* hook signatures", () => {
 
   it("the namespace generic flows to the items return type", () => {
     type R = ReturnType<typeof useDbIndexedCollection<IssueNs>>;
+    expectTypeOf<R["items"]>().toMatchTypeOf<
+      Array<{ id: string; title: string; teamId: string | null }>
+    >();
+  });
+
+  it("useDbIndexedCollections takes a values array and reuses the indexed-key constraint", () => {
+    type IndexedArg = Parameters<typeof useDbIndexedCollections<IssueNs>>[1];
+    type ValuesArg = Parameters<typeof useDbIndexedCollections<IssueNs>>[2];
+    expectTypeOf<IndexedArg>().toEqualTypeOf<"teamId">();
+    expectTypeOf<ValuesArg>().toEqualTypeOf<readonly string[] | null | undefined>();
+
+    type R = ReturnType<typeof useDbIndexedCollections<IssueNs>>;
     expectTypeOf<R["items"]>().toMatchTypeOf<
       Array<{ id: string; title: string; teamId: string | null }>
     >();

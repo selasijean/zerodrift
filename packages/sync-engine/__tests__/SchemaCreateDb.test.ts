@@ -513,6 +513,64 @@ describe("createDb — async readers", () => {
     );
   });
 
+  it("getByIndexValues fans out one loadCollection per value, then returns the deduped union", async () => {
+    db.dbTeam.create({ id: "team-mv-1", name: "A" });
+    db.dbTeam.create({ id: "team-mv-2", name: "B" });
+    const i1 = db.dbIssue.create({ id: "issue-mv-1", teamId: "team-mv-1" });
+    const i2 = db.dbIssue.create({ id: "issue-mv-2", teamId: "team-mv-2" });
+    db.dbIssue.create({ id: "issue-mv-other", teamId: "team-mv-other" });
+
+    const loadCollection = vi.spyOn(sm, "loadCollection");
+
+    const result = await db.dbIssue.getByIndexValues("teamId", [
+      "team-mv-1",
+      "team-mv-2",
+    ]);
+
+    expect(loadCollection).toHaveBeenCalledTimes(2);
+    expect(loadCollection).toHaveBeenNthCalledWith(
+      1,
+      "DbIssue",
+      "teamId",
+      "team-mv-1",
+    );
+    expect(loadCollection).toHaveBeenNthCalledWith(
+      2,
+      "DbIssue",
+      "teamId",
+      "team-mv-2",
+    );
+    expect(result).toHaveLength(2);
+    expect(result).toContain(i1);
+    expect(result).toContain(i2);
+  });
+
+  it("getByIndexValues with an empty values array resolves to [] without firing loadCollection", async () => {
+    const loadCollection = vi.spyOn(sm, "loadCollection");
+
+    const result = await db.dbIssue.getByIndexValues("teamId", []);
+
+    expect(result).toEqual([]);
+    expect(loadCollection).not.toHaveBeenCalled();
+  });
+
+  it("getByIndexValues dedupes records that match multiple values", async () => {
+    // Edge case: same record matching two query values (e.g. when the index
+    // is multi-valued or the test pre-seeds overlapping buckets). Today the
+    // pool only stores a record under one (key, value) at a time, but the
+    // dedupe is defensive against future indexed-array fields.
+    db.dbTeam.create({ id: "team-dup", name: "Dup" });
+    const issue = db.dbIssue.create({ id: "issue-dup", teamId: "team-dup" });
+
+    const result = await db.dbIssue.getByIndexValues("teamId", [
+      "team-dup",
+      "team-dup",
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe(issue);
+  });
+
   it("getAll() delegates to StoreManager.getOrLoadAll", async () => {
     const getOrLoadAll = vi.spyOn(sm, "getOrLoadAll").mockResolvedValue([]);
 
