@@ -33,7 +33,9 @@ export interface RelationCollection<T> {
 }
 
 type EntityFieldTypes<S extends SchemaDef, K extends EntityKey<S>> = {
-  [P in keyof EntityFieldsRecord<S, K>]: FieldType<EntityFieldsRecord<S, K>[P]>;
+  -readonly [P in keyof EntityFieldsRecord<S, K>]: FieldType<
+    EntityFieldsRecord<S, K>[P]
+  >;
 };
 
 type SingularRelationKey<

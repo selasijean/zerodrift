@@ -7,7 +7,21 @@ export { fields as s } from "./builders";
 export { compileSchema } from "./compile";
 export type { CompiledSchema } from "./compile";
 export { createDb } from "./createDb";
-export type { Db, EntityNamespace } from "./createDb";
+export type {
+  Db,
+  EntityNamespace,
+  RecordWithExtensions,
+} from "./createDb";
+
+export { extend } from "./extend";
+export type {
+  ActionFn,
+  ComputedFn,
+  ExtensionDef,
+  ExtensionDescriptor,
+  ExtensionMap,
+  MergedExtensionMembers,
+} from "./extend";
 
 export type {
   EntityDef,

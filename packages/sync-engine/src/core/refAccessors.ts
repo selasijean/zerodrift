@@ -71,3 +71,43 @@ export function installBackRefAccessor(prototype: object, key: string): void {
     },
   });
 }
+
+/**
+ * Install a prototype getter that calls `fn(this)` whenever the property is
+ * read. `BaseModel.makeModelObservable()` later replaces the per-instance
+ * binding with a MobX `computed`, so reads are memoized once observability
+ * is enabled. Used by the schema-first `extend(...)` pipeline.
+ */
+export function installComputedAccessor(
+  prototype: object,
+  key: string,
+  fn: (record: object) => unknown,
+): void {
+  Object.defineProperty(prototype, key, {
+    configurable: true,
+    enumerable: false,
+    get(this: object) {
+      return fn(this);
+    },
+  });
+}
+
+/**
+ * Install a prototype method that calls `fn(this, ...args)`.
+ * `BaseModel.makeModelObservable()` later wraps the per-instance binding
+ * with MobX `action` for write batching.
+ */
+export function installActionMethod(
+  prototype: object,
+  key: string,
+  fn: (record: object, ...args: never[]) => unknown,
+): void {
+  Object.defineProperty(prototype, key, {
+    configurable: true,
+    enumerable: false,
+    writable: true,
+    value(this: object, ...args: never[]) {
+      return fn(this, ...args);
+    },
+  });
+}
