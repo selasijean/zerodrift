@@ -131,7 +131,59 @@ const issueBehavior = extend(schema, "issue", {
 const db = createDb({ schema, storeManager: sm, extensions: [issueBehavior] });
 ```
 
-Both authoring paths compile to the same `ModelRegistry`, so a schema entity can reference a decorator class via `entity({ external: true, name: "User" })` (and vice versa). Optional Zod adapter (`fromZod` / `entityFromZod`) lets you reuse Zod schemas as the field source.
+Both authoring paths compile to the same `ModelRegistry`, so a schema entity can reference a decorator class via `entity({ external: true, name: "User" })` (and vice versa).
+
+### Drive entities from a Zod schema
+
+If your record shapes already live as Zod schemas (e.g. validating server responses), `entityFromZod(...)` reuses them as the field source. Zod doesn't carry FK or index metadata — layer those on per-field via `opts.fields`:
+
+```ts
+import { z } from "zod";
+import {
+  defineSchema, entityFromZod, link, fields as s, LoadStrategy,
+} from "sync-engine/schema";
+
+const ZodTeam = z.object({
+  id:   z.string(),
+  name: z.string(),
+});
+
+const ZodIssue = z.object({
+  id:       z.string(),
+  title:    z.string().default(""),
+  priority: z.number().default(0),
+  teamId:   z.string(),       // Zod can't model FK semantics
+  email:    z.string().nullable(),
+});
+
+const schema = defineSchema({
+  entities: {
+    team:  entityFromZod(ZodTeam, {
+      loadStrategy: LoadStrategy.Instant,
+      name: "Team",
+    }),
+    issue: entityFromZod(ZodIssue, {
+      loadStrategy: LoadStrategy.Instant,
+      name: "Issue",
+      fields: {
+        // Replacement form — substitute the Zod-derived FieldBuilder entirely.
+        teamId: s.refId("team").nullable().indexed(),
+        // Chain form — modify the auto-derived builder.
+        email:  (b) => b.indexed(),
+      },
+    }),
+  },
+  links: {
+    issueTeam: link({
+      from: { entity: "issue", field: "teamId", as: "team" },
+      to:   { entity: "team",  many: "issues", lazy: true },
+      onDelete: "cascade",
+    }),
+  },
+});
+```
+
+Override keys are constrained to `keyof z.infer<Z>` so typos fail to compile. Zod stays the source of field shape and validation; `link(...)` stays the source of truth for the relationship graph.
 
 See [`agent-docs/11-schema-first-authoring.md`](agent-docs/11-schema-first-authoring.md) for the full reference.
 
