@@ -204,6 +204,10 @@ export interface IStoreManager {
   getOrLoadByIds(modelName: string, ids: string[]): Promise<BaseModel[]>;
   getOrLoadById(modelName: string, id: string): Promise<BaseModel | null>;
   emitError(err: unknown, context: EngineErrorContext): void;
+  /** Mint a fresh id for a newly-constructed client-side model. Honors
+   * `StoreManagerConfig.identifierFn` if configured; otherwise falls back
+   * to `crypto.randomUUID()`. */
+  mintId(instance: BaseModel): string;
 }
 
 /**

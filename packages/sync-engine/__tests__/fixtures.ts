@@ -99,6 +99,7 @@ type FakeStoreManagerOverrides = {
     name: string,
     changes: Record<string, unknown>,
   ) => void;
+  mintId?: (instance: BaseModel) => string;
 };
 
 /**
@@ -115,6 +116,7 @@ export function makeFakeStoreManager(
     getOrLoadCollection: async () => [],
     getOrLoadByIds: async () => [],
     getOrLoadById: async () => null,
+    mintId: overrides.mintId ?? (() => crypto.randomUUID()),
   } as unknown as StoreManager;
 }
 

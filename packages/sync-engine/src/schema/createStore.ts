@@ -273,7 +273,8 @@ export function createStore<
   const Exts extends readonly ExtensionDescriptor<S>[] = readonly [],
 >(opts: {
   schema: S;
-  storeManager: StoreManager;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  storeManager: StoreManager<any>;
   extensions?: Exts;
 }): EntityStore<S, Exts> {
   const compiled = compileSchema(opts.schema);

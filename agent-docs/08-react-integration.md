@@ -22,6 +22,34 @@ Wrap your app in `SyncProvider`. It creates the `StoreManager`, runs bootstrap, 
 - Once `Ready`, children render and have full access to the engine
 - On unmount, `sm.teardown()` closes the SSE connection and cleans up
 
+### `context` prop — runtime input for `identifierFn`
+
+`SyncProvider` is generic in `TContext`. When the consumer config supplies an `identifierFn`, the `context` prop is the live value forwarded into it.
+
+```typescript
+type AppContext = { userId: string; tenantId: string };
+
+<SyncProvider<AppContext>
+  config={{
+    workspaceId: "ws-1",
+    bootstrapFetcher,
+    identifierFn: (meta, ctx) =>
+      ctx == null
+        ? crypto.randomUUID()
+        : `${ctx.tenantId}:${meta.name}:${crypto.randomUUID()}`,
+  }}
+  context={{ userId, tenantId }}
+>
+  <App />
+</SyncProvider>
+```
+
+Mechanics:
+
+- The provider seeds the `StoreManager` with the initial `context` during construction (before `bootstrap()` resolves), then pushes updates through `sm.setContext` in a `useLayoutEffect` so handlers fired in the same commit as a context change see the fresh value when minting ids.
+- Context is sampled at id-mint time, not captured — hot updates are picked up on the next `new Model()` call.
+- `identifierFn` only runs for client-side construction; server- and IDB-hydrated records carry their own ids.
+
 ## useSyncEngine
 
 ```typescript

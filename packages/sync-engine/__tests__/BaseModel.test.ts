@@ -445,4 +445,30 @@ describe("BaseModel", () => {
       expect(task.projectId).toBeNull();
     });
   });
+
+  // ── id minting via StoreManager ─────────────────────────────────────────────
+
+  describe("id minting", () => {
+    it("falls back to a UUID when no StoreManager is wired", () => {
+      const task = new TestTask();
+      expect(task.id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      );
+    });
+
+    it("routes through storeManager.mintId when one is wired", () => {
+      const calls: string[] = [];
+      BaseModel.storeManager = makeFakeStoreManager({
+        mintId: (instance) => {
+          calls.push(instance.constructor.name);
+          return "minted-id";
+        },
+      });
+
+      const task = new TestTask();
+
+      expect(task.id).toBe("minted-id");
+      expect(calls).toEqual(["TestTask"]);
+    });
+  });
 });

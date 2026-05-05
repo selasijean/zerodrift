@@ -222,6 +222,30 @@ export default function Providers({ children }) {
 }
 ```
 
+### Custom id generation with context
+
+By default new client-side models get `crypto.randomUUID()`. Override with `identifierFn` to mint ids that depend on runtime state (current user, tenant, etc.) — the live state is forwarded via the `context` prop:
+
+```tsx
+type AppContext = { userId: string; tenantId: string };
+
+<SyncProvider<AppContext>
+  config={{
+    workspaceId: "ws-1",
+    bootstrapFetcher,
+    identifierFn: (meta, ctx) =>
+      ctx == null
+        ? crypto.randomUUID()
+        : `${ctx.tenantId}:${meta.name}:${crypto.randomUUID()}`,
+  }}
+  context={{ userId, tenantId }}
+>
+  {children}
+</SyncProvider>
+```
+
+`identifierFn` only fires for client-side `new Model()` construction — records hydrated from the server or IndexedDB carry their own ids. Context is sampled at mint time, so handlers fired in the same commit as a context change see the fresh value.
+
 ### Reading data
 
 ```tsx
@@ -338,6 +362,8 @@ const sm = new StoreManager({
 
 await sm.bootstrap();
 ```
+
+For headless callers using `identifierFn`, push context with `sm.setContext(ctx)` whenever the relevant state (user, tenant, …) changes — id generation reads it on demand, not at config time.
 
 | Environment | `sseClientFactory` | `storageAdapter` |
 |---|---|---|

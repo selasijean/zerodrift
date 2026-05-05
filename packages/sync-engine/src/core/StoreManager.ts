@@ -64,6 +64,7 @@ import {
   LoadStrategy,
   PropertyType,
   toError,
+  type ModelMeta,
   type PropertyChange,
   type EngineErrorContext,
   type EngineErrorHandler,
@@ -136,7 +137,7 @@ export interface ModelStreamConfig {
   transform?: ModelStreamMessageTransform;
 }
 
-export interface StoreManagerConfig {
+export interface StoreManagerConfig<TContext = unknown> {
   workspaceId: string;
   bootstrapFetcher: BootstrapFetcher;
   transactionSender?: TransactionSender;
@@ -302,8 +303,21 @@ export interface StoreManagerConfig {
    */
   onSyncGroupDelete?: (
     groupId: string,
-    sm: StoreManager,
+    sm: StoreManager<TContext>,
   ) => void | Promise<void>;
+
+  /**
+   * Mint the `id` for newly-constructed client-side models. Called from
+   * BaseModel's id initializer; not invoked for records hydrated from the
+   * server or from IndexedDB (those carry their own ids).
+   *
+   * Receives the live context most recently set via `setContext` (or the
+   * SyncProvider `context` prop). Context is `undefined` until the consumer
+   * sets it — guard accordingly if your scheme requires user/tenant info.
+   *
+   * Defaults to `crypto.randomUUID()` when omitted.
+   */
+  identifierFn?: (meta: ModelMeta, context: TContext | undefined) => string;
 
   /**
    * Hooks for undoing/redoing remote side-effects committed via non-model APIs
@@ -329,7 +343,7 @@ export interface StoreManagerConfig {
  */
 const ALL_INDEX_KEY_SENTINEL = "*";
 
-export class StoreManager {
+export class StoreManager<TContext = unknown> {
   readonly objectPool: ObjectPool;
   readonly database: StorageAdapter;
   readonly transactionQueue: TransactionQueue;
@@ -341,7 +355,8 @@ export class StoreManager {
   private stores = new Map<string, ModelStore>();
   private syncConnection: SyncConnection | null = null;
   private modelStreams: ModelStream[] = [];
-  private config: StoreManagerConfig;
+  private config: StoreManagerConfig<TContext>;
+  private context: TContext | undefined = undefined;
   private _phase = BootstrapPhase.Idle;
   private _error: Error | null = null;
   private stopped = false;
@@ -371,7 +386,7 @@ export class StoreManager {
   /** Wired only when `onDemandIndexBatchFetcher` is configured. */
   private indexBatchLoader: BatchModelLoader | null = null;
 
-  constructor(config: StoreManagerConfig) {
+  constructor(config: StoreManagerConfig<TContext>) {
     this.config = config;
     this.objectPool = new ObjectPool();
     this.database = config.storageAdapter ?? new Database(config.workspaceId);
@@ -406,6 +421,28 @@ export class StoreManager {
       this.indexBatchLoader = new BatchModelLoader(fetcher);
     }
     BaseModel.storeManager = this; // wire auto-commit
+  }
+
+  // ── Context (for identifierFn) ───────────────────────────────────────────
+
+  /** Push the live context (e.g. user/tenant info) used by `identifierFn`.
+   * Read at id-mint time, not captured — call this whenever the relevant
+   * context changes. The React `<SyncProvider context={...}>` prop is a
+   * thin wrapper over this. */
+  setContext(ctx: TContext): void {
+    this.context = ctx;
+  }
+
+  /** Mint a fresh id, honoring `identifierFn` when configured. Folds the
+   * registry lookup in so callers can skip it entirely on the no-config
+   * path — `new Model()` is hot. */
+  mintId(instance: BaseModel): string {
+    const fn = this.config.identifierFn;
+    if (fn == null) {
+      return crypto.randomUUID();
+    }
+    const meta = ModelRegistry.getMetaForInstance(instance);
+    return meta != null ? fn(meta, this.context) : crypto.randomUUID();
   }
 
   // ── Bootstrap phases ──────────────────────────────────────────────────────

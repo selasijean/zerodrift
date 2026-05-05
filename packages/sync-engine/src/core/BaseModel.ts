@@ -43,7 +43,7 @@ const FLAT_PROPERTY_TYPES = new Set([
 ]);
 
 export class BaseModel {
-  id: string = crypto.randomUUID();
+  id: string = BaseModel.storeManager?.mintId(this) ?? crypto.randomUUID();
 
   __mobx: { [key: string]: IObservableValue<unknown> | undefined } = {};
   __observabilityEnabled = false;

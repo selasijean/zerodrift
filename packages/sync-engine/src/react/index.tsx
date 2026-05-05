@@ -34,8 +34,10 @@ export interface SyncStatus {
   error?: string;
 }
 
+// `<any>` keeps the hooks free of TContext — none of them touch it.
 const SyncContext = createContext<{
-  sm: StoreManager;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  sm: StoreManager<any>;
   status: SyncStatus;
 } | null>(null);
 
@@ -43,12 +45,17 @@ const SyncContext = createContext<{
 // Provider
 // ---------------------------------------------------------------------------
 
-export function SyncProvider({
+export function SyncProvider<TContext = unknown>({
   config,
+  context,
   children,
   fallback,
 }: {
-  config: StoreManagerConfig;
+  config: StoreManagerConfig<TContext>;
+  /** Live context forwarded to `StoreManager.setContext` — consumed by
+   * `identifierFn` when minting ids for client-side models. Pushed
+   * synchronously so handlers fired in the same commit see the update. */
+  context?: TContext;
   children: React.ReactNode;
   /** Shown while bootstrap is in progress. */
   fallback?: React.ReactNode;
@@ -56,7 +63,7 @@ export function SyncProvider({
   const [status, setStatus] = useState<SyncStatus>({
     phase: BootstrapPhase.Idle,
   });
-  const smRef = useRef<StoreManager | null>(null);
+  const smRef = useRef<StoreManager<TContext> | null>(null);
   const cfgRef = useRef(config);
   cfgRef.current = config;
 
@@ -75,10 +82,16 @@ export function SyncProvider({
     return () => window.removeEventListener("pageshow", handlePageShow);
   }, []);
 
+  // Latest context, sampled at render time. Captured into a ref so the
+  // construction effect can seed the StoreManager without re-running when
+  // the context changes (the dedicated effect below pushes updates).
+  const contextRef = useRef(context);
+  contextRef.current = context;
+
   useEffect(() => {
     let active = true;
 
-    const sm = new StoreManager({
+    const sm = new StoreManager<TContext>({
       ...cfgRef.current,
       onPhaseChange: (phase, detail) => {
         cfgRef.current.onPhaseChange?.(phase, detail);
@@ -87,6 +100,9 @@ export function SyncProvider({
         }
       },
     });
+    if (contextRef.current !== undefined) {
+      sm.setContext(contextRef.current);
+    }
     smRef.current = sm;
     sm.bootstrap().catch((err) => {
       if (active) {
@@ -99,6 +115,14 @@ export function SyncProvider({
       smRef.current = null;
     };
   }, [cfgRef.current.workspaceId]);
+
+  // Push context updates synchronously so an event handler dispatched in the
+  // same commit as a context change sees the fresh value when minting ids.
+  useLayoutEffect(() => {
+    if (smRef.current != null && context !== undefined) {
+      smRef.current.setContext(context);
+    }
+  }, [context]);
 
   if (smRef.current == null) {
     return fallback != null ? <>{fallback}</> : null;

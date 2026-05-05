@@ -1315,4 +1315,75 @@ describe("StoreManager", () => {
       await sm2.teardown();
     });
   });
+
+  // ── identifierFn / setContext / mintId ────────────────────────────────────
+
+  describe("identifierFn + context", () => {
+    it("falls back to crypto.randomUUID() when no identifierFn is configured", () => {
+      const id = manager.mintId(new TestTask());
+      expect(typeof id).toBe("string");
+      expect(id.length).toBeGreaterThan(10);
+    });
+
+    it("calls identifierFn with the model's meta and the live context", () => {
+      type Ctx = { tenantId: string };
+      const fn = vi.fn(
+        (meta, ctx: Ctx | undefined) =>
+          `${ctx?.tenantId ?? "anon"}:${meta.name}:fixed`,
+      );
+      const sm = new StoreManager<Ctx>({
+        workspaceId: "ws",
+        bootstrapFetcher: vi.fn(),
+        identifierFn: fn,
+      });
+      sm.setContext({ tenantId: "acme" });
+
+      // `new` triggers the id initializer, which routes through mintId.
+      const task = new TestTask();
+
+      expect(task.id).toBe("acme:TestTask:fixed");
+      expect(fn).toHaveBeenCalledTimes(1);
+      const [metaArg, ctxArg] = fn.mock.calls[0]!;
+      expect(metaArg.name).toBe("TestTask");
+      expect(ctxArg).toEqual({ tenantId: "acme" });
+    });
+
+    it("setContext updates what subsequent mintId calls see", () => {
+      type Ctx = { user: string };
+      const fn = vi.fn(
+        (_meta, ctx: Ctx | undefined) => `${ctx?.user ?? "none"}-id`,
+      );
+      const sm = new StoreManager<Ctx>({
+        workspaceId: "ws",
+        bootstrapFetcher: vi.fn(),
+        identifierFn: fn,
+      });
+
+      const before = sm.mintId(new TestTask());
+      sm.setContext({ user: "alice" });
+      const afterFirst = sm.mintId(new TestTask());
+      sm.setContext({ user: "bob" });
+      const afterSecond = sm.mintId(new TestTask());
+
+      expect(before).toBe("none-id");
+      expect(afterFirst).toBe("alice-id");
+      expect(afterSecond).toBe("bob-id");
+    });
+
+    it("falls back to crypto.randomUUID() when the model isn't registered", () => {
+      const fn = vi.fn(() => "should-not-be-called");
+      const sm = new StoreManager({
+        workspaceId: "ws",
+        bootstrapFetcher: vi.fn(),
+        identifierFn: fn,
+      });
+
+      class Unregistered {}
+      const id = sm.mintId(new Unregistered() as unknown as TestTask);
+
+      expect(fn).not.toHaveBeenCalled();
+      expect(typeof id).toBe("string");
+      expect(id.length).toBeGreaterThan(10);
+    });
+  });
 });

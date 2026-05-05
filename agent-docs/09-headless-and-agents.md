@@ -75,6 +75,28 @@ await sm.bootstrap();
 
 The `reflect-metadata` polyfill must be imported once before any decorated class is used. It's a peer dependency of the engine.
 
+## Custom id generation with context
+
+`StoreManager` is generic in `TContext`. When `StoreManagerConfig.identifierFn` is supplied, it's invoked for every client-side `new Model()` (records hydrated from the server or storage adapter keep their existing ids). Push runtime state with `sm.setContext`:
+
+```typescript
+type AgentContext = { agentId: string; tenantId: string };
+
+const sm = new StoreManager<AgentContext>({
+  workspaceId: "agent-1",
+  bootstrapFetcher,
+  identifierFn: (meta, ctx) =>
+    ctx == null
+      ? crypto.randomUUID()
+      : `${ctx.tenantId}:${meta.name}:${crypto.randomUUID()}`,
+});
+
+sm.setContext({ agentId: "claude-1", tenantId: "acme" });
+await sm.bootstrap();
+```
+
+Context is read on demand at id-mint time, not captured — re-call `setContext` whenever the relevant state changes. If `identifierFn` is omitted, ids fall back to `crypto.randomUUID()` and `setContext` is a no-op.
+
 ## Reactivity Without React
 
 React's observer model (`useSyncExternalStore`, `useEffect`) doesn't exist in Node.js. The engine exposes three callback-based APIs for headless reactivity.
