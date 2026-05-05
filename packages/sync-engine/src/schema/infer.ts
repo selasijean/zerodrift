@@ -14,7 +14,7 @@ export type EntityKey<S extends SchemaDef> = keyof S["entities"] & string;
 
 /**
  * Field keys on an entity that were declared with `.indexed()`. Used to
- * constrain `db.<entity>.loadByIndex(key, value)` so callers can only pass
+ * constrain `store.<entity>.loadByIndex(key, value)` so callers can only pass
  * indexes that actually exist on disk.
  */
 export type IndexedFieldKeys<

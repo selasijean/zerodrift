@@ -321,8 +321,8 @@ describe("entityFromZod — per-field overrides", () => {
 
   // Type-level: override metadata (.indexed(), refId target, etc.) propagates
   // into the inferred EntityDef, so IndexedFieldKeys can extract the indexed
-  // fields and downstream APIs (db.<entity>.getByIndex / peekByIndex /
-  // useDbIndexedCollection) see them. Covers both override forms — the
+  // fields and downstream APIs (store.<entity>.getByIndex / peekByIndex /
+  // useEntitiesByIndex) see them. Covers both override forms — the
   // builder replacement (`teamId`) and the chain modifier (`email`).
   it("propagates override metadata into the entity's TS type so IndexedFieldKeys works", () => {
     const schema = defineSchema({

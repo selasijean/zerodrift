@@ -533,8 +533,8 @@ function useStableCallback<TParams extends unknown[], TResult>(
 // ---------------------------------------------------------------------------
 // Typed schema-first hooks
 //
-// `useDbModel(db.<entity>, id)`, `useDbModels(db.<entity>, ids?)`, and
-// `useDbIndexedCollection(db.<entity>, key, value)` are schema-aware
+// `useEntity(store.<entity>, id)`, `useEntities(store.<entity>, ids?)`, and
+// `useEntitiesByIndex(store.<entity>, key, value)` are schema-aware
 // counterparts of the string-keyed hooks above. They infer the record
 // type from the namespace and constrain the index key against the
 // schema's `.indexed()` fields. Internally they extract the registry
@@ -545,7 +545,7 @@ import {
   entityNamespaceRegistryName,
   type EntityNamespace,
   type RecordWithExtensions,
-} from "../schema/createDb";
+} from "../schema/createStore";
 import type { ExtensionDescriptor } from "../schema/extend";
 import type { EntityKey, IndexedFieldKeys } from "../schema/infer";
 import type { SchemaDef } from "../schema/types";
@@ -579,7 +579,7 @@ type IndexedKeysOf<NS> = NS extends EntityNamespace<infer S, infer K, infer _Ext
 // has internals like `__mobx`/`store`; RecordOf has schema fields like
 // `title`/`name` plus extension members). One cast per wrapper, contained.
 
-export function useDbModel<NS extends AnyNamespace>(
+export function useEntity<NS extends AnyNamespace>(
   ns: NS,
   id: string | null | undefined,
 ): LoaderItemResult<RecordOf<NS>> {
@@ -587,7 +587,7 @@ export function useDbModel<NS extends AnyNamespace>(
     LoaderItemResult<RecordOf<NS>>;
 }
 
-export function useDbModels<NS extends AnyNamespace>(
+export function useEntities<NS extends AnyNamespace>(
   ns: NS,
   ids?: string[] | null,
 ): LoaderItemsResult<RecordOf<NS>> {
@@ -595,7 +595,7 @@ export function useDbModels<NS extends AnyNamespace>(
     LoaderItemsResult<RecordOf<NS>>;
 }
 
-export function useDbIndexedCollection<NS extends AnyNamespace>(
+export function useEntitiesByIndex<NS extends AnyNamespace>(
   ns: NS,
   indexKey: IndexedKeysOf<NS>,
   value: string | null | undefined,
@@ -607,7 +607,7 @@ export function useDbIndexedCollection<NS extends AnyNamespace>(
   ) as unknown as LoaderItemsResult<RecordOf<NS>>;
 }
 
-export function useDbIndexedCollections<NS extends AnyNamespace>(
+export function useEntitiesByIndexValues<NS extends AnyNamespace>(
   ns: NS,
   indexKey: IndexedKeysOf<NS>,
   values: readonly string[] | null | undefined,

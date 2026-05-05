@@ -144,7 +144,7 @@ export interface EntityNamespace<
   /**
    * Apply a partial update to a record already in the pool. Throws if no
    * record with `id` is found — to fetch and update lazy-loaded records,
-   * `await db.<entity>.get(id)` first.
+   * `await store.<entity>.get(id)` first.
    */
   update(id: string, input: InferUpdateInput<S, K>): void;
   /** Delete the record with full cascade / restrict semantics. */
@@ -206,8 +206,8 @@ export interface EntityNamespace<
 }
 
 /**
- * Top-level `db` methods that aren't entity namespaces. Kept on a sibling
- * intersection so `Db<S>` stays "one entry per entity key" — the schema
+ * Top-level `store` methods that aren't entity namespaces. Kept on a sibling
+ * intersection so `EntityStore<S>` stays "one entry per entity key" — the schema
  * compiler reserves these names so an entity can't shadow them.
  *
  * For React, prefer `useUndoRedo()` from `sync-engine/react` — it
@@ -215,9 +215,9 @@ export interface EntityNamespace<
  * reactive. These methods are the imperative path for non-React
  * consumers (CLI tools, headless agents, tests).
  */
-export interface DbTopLevel {
+export interface StoreApi {
   /**
-   * Run `fn` inside a transaction batch. Every `db.<entity>.create / update /
+   * Run `fn` inside a transaction batch. Every `store.<entity>.create / update /
    * delete` call inside shares a single `batchId`, ships in one HTTP POST,
    * and reverses as one unit on undo. Returns the `batchId`.
    *
@@ -240,10 +240,10 @@ export interface DbTopLevel {
   readonly redoDepth: number;
   /**
    * Run a remote side-effect that returns a `changeLogId`, recording it on
-   * the undo stack so the next `db.undo()` invokes the
+   * the undo stack so the next `store.undo()` invokes the
    * `undoableActions.undo` handler with that id. `fn` may return either the
    * `changeLogId` directly or any object carrying one. Inside an open
-   * `db.batch(...)`, the action joins the batch.
+   * `store.batch(...)`, the action joins the batch.
    */
   runUndoable<T extends string | { changeLogId: string }>(
     fn: () => Promise<T> | T,
@@ -251,12 +251,12 @@ export interface DbTopLevel {
   ): Promise<T>;
 }
 
-export type Db<
+export type EntityStore<
   S extends SchemaDef,
   Exts extends readonly ExtensionDescriptor<S>[] = readonly [],
 > = {
   [K in EntityKey<S>]: EntityNamespace<S, K, Exts>;
-} & DbTopLevel;
+} & StoreApi;
 
 interface ExtensionBucket {
   computed: Record<string, ComputedFn<SchemaDef, string>>;
@@ -268,14 +268,14 @@ interface ExtensionBucket {
  * `BaseModel` instances that structurally satisfy the inferred record type;
  * the proxy-based public surface described in the RFC lands later.
  */
-export function createDb<
+export function createStore<
   S extends SchemaDef,
   const Exts extends readonly ExtensionDescriptor<S>[] = readonly [],
 >(opts: {
   schema: S;
   storeManager: StoreManager;
   extensions?: Exts;
-}): Db<S, Exts> {
+}): EntityStore<S, Exts> {
   const compiled = compileSchema(opts.schema);
   const sm = opts.storeManager;
   const merged = mergeExtensions(opts.extensions);
@@ -288,8 +288,8 @@ export function createDb<
     applyExtension(registryName, defs, sm);
   }
 
-  const db: Record<string, unknown> = {
-    batch: sm.batch.bind(sm) as DbTopLevel["batch"],
+  const store: Record<string, unknown> = {
+    batch: sm.batch.bind(sm) as StoreApi["batch"],
     undo: () => sm.undo(),
     redo: () => sm.redo(),
     get undoDepth() {
@@ -301,12 +301,12 @@ export function createDb<
     // Dynamic delegate (not `.bind(sm)`) so test-time `vi.spyOn(sm, "runUndoable")`
     // intercepts calls. `bind` would capture the original at construction time.
     runUndoable: ((fn, opts) =>
-      sm.runUndoable(fn, opts)) as DbTopLevel["runUndoable"],
+      sm.runUndoable(fn, opts)) as StoreApi["runUndoable"],
   };
   for (const [entityKey, registryName] of compiled.nameByKey) {
-    db[entityKey] = createEntityNamespace(registryName, sm);
+    store[entityKey] = createEntityNamespace(registryName, sm);
   }
-  return db as Db<S, Exts>;
+  return store as EntityStore<S, Exts>;
 }
 
 function mergeExtensions<S extends SchemaDef>(
@@ -412,7 +412,7 @@ function createEntityNamespace(
   const meta = ModelRegistry.getModelMeta(registryName);
   if (meta == null) {
     throw new Error(
-      `createDb: model "${registryName}" is not in ModelRegistry. ` +
+      `createStore: model "${registryName}" is not in ModelRegistry. ` +
         `Did the schema fail to compile?`,
     );
   }
@@ -558,7 +558,7 @@ function requireInstance(
   const model = sm.objectPool.getById(registryName, id);
   if (model == null) {
     throw new Error(
-      `createDb.${registryName}.${action}: no record with id "${id}" in the pool.`,
+      `createStore.${registryName}.${action}: no record with id "${id}" in the pool.`,
     );
   }
   return model;

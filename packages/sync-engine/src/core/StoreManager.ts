@@ -1978,7 +1978,7 @@ export class StoreManager {
 
   /**
    * Sync filter over the pool for records of `modelName` whose `indexKey`
-   * field matches `value`. Used by the typed `db.<entity>.peekByIndex`
+   * field matches `value`. Used by the typed `store.<entity>.peekByIndex`
    * surface and shared with the diff path inside `refreshCollection`.
    */
   peekByIndex<T extends BaseModel = BaseModel>(

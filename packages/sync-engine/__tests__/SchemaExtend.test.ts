@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  createDb,
+  createStore,
   defineSchema,
   entity,
   extend,
@@ -68,7 +68,7 @@ const teamBehavior = extend(extSchema, {
 
 let sm: StoreManager;
 let db: ReturnType<
-  typeof createDb<typeof extSchema, readonly [typeof issueBehavior, typeof teamBehavior]>
+  typeof createStore<typeof extSchema, readonly [typeof issueBehavior, typeof teamBehavior]>
 >;
 
 beforeEach(async () => {
@@ -83,7 +83,7 @@ beforeEach(async () => {
     }),
   });
   await sm.database.connect();
-  db = createDb({
+  db = createStore({
     schema: extSchema,
     storeManager: sm,
     extensions: [issueBehavior, teamBehavior] as const,
@@ -238,7 +238,7 @@ describe("extend — composing multiple descriptors", () => {
     expect(typeof issue.bump).toBe("function");
   });
 
-  it("rebinds extension implementations when createDb() runs again", () => {
+  it("rebinds extension implementations when createStore() runs again", () => {
     db.extTeam.create({ id: "team-rebind", key: "REB", name: "Rebind" });
     const issue = db.extIssue.create({
       id: "issue-rebind",
@@ -258,7 +258,7 @@ describe("extend — composing multiple descriptors", () => {
       },
     });
 
-    const rebound = createDb({
+    const rebound = createStore({
       schema: extSchema,
       storeManager: sm,
       extensions: [replacement, teamBehavior] as const,

@@ -9,7 +9,7 @@ You bring the backend. The client speaks a small three-endpoint protocol — imp
 - **Local-first** — every read is sync against an in-memory `ObjectPool`; writes apply optimistically and reconcile with server deltas.
 - **Realtime** — multi-tab and multi-client sync via SSE. Other clients' edits show up without polling.
 - **Offline** — IndexedDB-backed; transactions queue while disconnected and replay on reconnect.
-- **Two authoring paths** — decorator classes for hand-written models, or `defineSchema(...)` for schema-as-data with a fully-typed `db.<entity>.*` API. Both compile to the same registry shape and coexist in one app.
+- **Two authoring paths** — decorator classes for hand-written models, or `defineSchema(...)` for schema-as-data with a fully-typed `store.<entity>.*` API. Both compile to the same registry shape and coexist in one app.
 - **Batched undo/redo** — group writes into a single undoable action; `runUndoable(fn)` puts non-model server calls on the same stack.
 - **Headless** — no React or DOM dependency in the core. Run it in Node for agents, CLIs, or service-side workers.
 - **Bring your own backend** — three endpoints, no specific language or storage required.
@@ -19,8 +19,8 @@ You bring the backend. The client speaks a small three-endpoint protocol — imp
 | Import | What's in it |
 |---|---|
 | `sync-engine` | `StoreManager`, `BaseModel`, decorators, `ObjectPool`, types. Vanilla TS — no React, no DOM. |
-| `sync-engine/schema` | `defineSchema`, `entity`, `link`, `s` (field builders), `extend`, `createDb`, Zod adapter (`fromZod` / `entityFromZod`). Schema-as-data authoring; produces a typed `db.<entity>.*` API. |
-| `sync-engine/react` | `<SyncProvider>` and hooks: `useModel`, `useModels`, `useIndexedCollection`, `useIndexedCollections`, `useCollection`, `useBackRef`, `useUndoRedo`, `useBatch`, `useBootstrapStatus`. Schema-typed siblings: `useDbModel`, `useDbModels`, `useDbIndexedCollection`, `useDbIndexedCollections`. |
+| `sync-engine/schema` | `defineSchema`, `entity`, `link`, `s` (field builders), `extend`, `createStore`, Zod adapter (`fromZod` / `entityFromZod`). Schema-as-data authoring; produces a typed `store.<entity>.*` API. |
+| `sync-engine/react` | `<SyncProvider>` and hooks: `useModel`, `useModels`, `useIndexedCollection`, `useIndexedCollections`, `useCollection`, `useBackRef`, `useUndoRedo`, `useBatch`, `useBootstrapStatus`. Schema-typed siblings: `useEntity`, `useEntities`, `useEntitiesByIndex`, `useEntitiesByIndexValues`. |
 
 ## Define your models
 
@@ -69,12 +69,12 @@ See [`agent-docs/01-models-and-decorators.md`](agent-docs/01-models-and-decorato
 
 ## Schema-first authoring (alternative)
 
-The same models authored as plain data, with a typed `db.<entity>.*` API falling out of the schema:
+The same models authored as plain data, with a typed `store.<entity>.*` API falling out of the schema:
 
 ```ts
 import {
   defineSchema, entity, link, fields as s, LoadStrategy,
-  createDb, extend,
+  createStore, extend,
 } from "sync-engine/schema";
 
 export const schema = defineSchema({
@@ -102,22 +102,22 @@ export const schema = defineSchema({
   },
 });
 
-const db = createDb({ schema, storeManager: sm });
+const store = createStore({ schema, storeManager: sm });
 
 // Reads — sync (peek) vs async (get) vs force-network (refresh):
-const team = db.team.peek(teamId);                              // pool snapshot, sync
-const issue = await db.issue.get(issueId);                      // pool-first, falls back to IDB / fetcher
-const allTeams = await db.team.getAll();
-const teamIssues = await db.issue.getByIndex("teamId", teamId); // key constrained to .indexed() fields
+const team = store.team.peek(teamId);                              // pool snapshot, sync
+const issue = await store.issue.get(issueId);                      // pool-first, falls back to IDB / fetcher
+const allTeams = await store.team.getAll();
+const teamIssues = await store.issue.getByIndex("teamId", teamId); // key constrained to .indexed() fields
 
 // Writes — typed records with create/update/delete + per-record save:
-const issueA = db.issue.create({ title: "Fix bug", teamId: team!.id });
-db.issue.update(issueA.id, { priority: 1 });
+const issueA = store.issue.create({ title: "Fix bug", teamId: team!.id });
+store.issue.update(issueA.id, { priority: 1 });
 issueA.title = "Fix hydration bug"; issueA.save();
 
 // Subscriptions — payload-less, re-read inside the handler:
-db.issue.watchByIndex("teamId", teamId, () => {
-  const items = db.issue.peekByIndex("teamId", teamId);
+store.issue.watchByIndex("teamId", teamId, () => {
+  const items = store.issue.peekByIndex("teamId", teamId);
 });
 ```
 
@@ -128,7 +128,7 @@ const issueBehavior = extend(schema, "issue", {
   computed: { identifier: (i) => `${i.priority}-${i.title.slice(0, 8)}` },
   actions:  { moveToTeam(i, teamId: string) { i.teamId = teamId; } },
 });
-const db = createDb({ schema, storeManager: sm, extensions: [issueBehavior] });
+const store = createStore({ schema, storeManager: sm, extensions: [issueBehavior] });
 ```
 
 Both authoring paths compile to the same `ModelRegistry`, so a schema entity can reference a decorator class via `entity({ external: true, name: "User" })` (and vice versa).
@@ -232,18 +232,23 @@ const { phase } = useBootstrapStatus();                      // engine lifecycle
 
 Pool-keyed hooks (`useModel`, `useModels`, `useIndexedCollection`) return `{ item | items, isLoading, error, reload }`. The collection-wrapper hooks (`useCollection`, `useBackRef`) wrap a runtime collection you already hold and additionally expose `isLoaded` (and return `value` for `useBackRef`).
 
-If you author models via `defineSchema(...)`, prefer the typed siblings — they take the `db.<entity>` namespace directly and infer the record type from the schema:
+If you author models via `defineSchema(...)`, prefer the typed siblings — they take the `store.<entity>` namespace directly and infer the record type from the schema:
 
 ```tsx
-import { useDbModel, useDbModels, useDbIndexedCollection } from "sync-engine/react";
+import {
+  useEntity,
+  useEntities,
+  useEntitiesByIndex,
+  useEntitiesByIndexValues,
+} from "sync-engine/react";
 
-const { item: issue } = useDbModel(db.issue, issueId);
-const { items: teams } = useDbModels(db.team);
-const { items: teamIssues } = useDbIndexedCollection(db.issue, "teamId", teamId);
+const { item: issue } = useEntity(store.issue, issueId);
+const { items: teams } = useEntities(store.team);
+const { items: teamIssues } = useEntitiesByIndex(store.issue, "teamId", teamId);
 //                                                            ^^^^^^^^ autocompletes to indexed fields only
 
 // Multi-value form — issues for any of these teams.
-const { items: myIssues } = useDbIndexedCollections(db.issue, "teamId", myTeamIds);
+const { items: myIssues } = useEntitiesByIndexValues(store.issue, "teamId", myTeamIds);
 ```
 
 Same return shape, same reactivity contract — the typed hooks are thin wrappers that resolve the registry name from the namespace and delegate to the string-keyed primitives.

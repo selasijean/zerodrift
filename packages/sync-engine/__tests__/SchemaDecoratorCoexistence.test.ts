@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   compileSchema,
-  createDb,
+  createStore,
   defineSchema,
   entity,
   link,
@@ -61,7 +61,7 @@ const coexSchema = defineSchema({
 });
 
 let sm: StoreManager;
-let db: ReturnType<typeof createDb<typeof coexSchema>>;
+let db: ReturnType<typeof createStore<typeof coexSchema>>;
 
 beforeEach(async () => {
   BaseModel.storeManager = null;
@@ -75,7 +75,7 @@ beforeEach(async () => {
     }),
   });
   await sm.database.connect();
-  db = createDb({ schema: coexSchema, storeManager: sm });
+  db = createStore({ schema: coexSchema, storeManager: sm });
 });
 
 afterEach(async () => {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  createDb,
+  createStore,
   defineSchema,
   entity,
   link,
@@ -40,7 +40,7 @@ const dbSchema = defineSchema({
 });
 
 let sm: StoreManager;
-let db: ReturnType<typeof createDb<typeof dbSchema>>;
+let db: ReturnType<typeof createStore<typeof dbSchema>>;
 
 beforeEach(async () => {
   BaseModel.storeManager = null;
@@ -54,7 +54,7 @@ beforeEach(async () => {
     }),
   });
   await sm.database.connect();
-  db = createDb({ schema: dbSchema, storeManager: sm });
+  db = createStore({ schema: dbSchema, storeManager: sm });
 });
 
 afterEach(async () => {
@@ -63,10 +63,10 @@ afterEach(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// createDb shape
+// createStore shape
 // ---------------------------------------------------------------------------
 
-describe("createDb — shape", () => {
+describe("createStore — shape", () => {
   it("exposes one namespace per entity key", () => {
     expect(typeof db.dbTeam.peek).toBe("function");
     expect(typeof db.dbTeam.create).toBe("function");
@@ -81,7 +81,7 @@ describe("createDb — shape", () => {
 // peek
 // ---------------------------------------------------------------------------
 
-describe("createDb — peek", () => {
+describe("createStore — peek", () => {
   it("returns null when no record is in the pool", () => {
     expect(db.dbTeam.peek("missing")).toBeNull();
   });
@@ -96,7 +96,7 @@ describe("createDb — peek", () => {
 // create
 // ---------------------------------------------------------------------------
 
-describe("createDb — create", () => {
+describe("createStore — create", () => {
   it("returns an instance whose fields reflect the input", () => {
     const team = db.dbTeam.create({ id: "team-create-1", name: "Design" });
     expect(team.id).toBe("team-create-1");
@@ -133,7 +133,7 @@ describe("createDb — create", () => {
 // update
 // ---------------------------------------------------------------------------
 
-describe("createDb — update", () => {
+describe("createStore — update", () => {
   it("applies a partial update and enqueues a transaction", () => {
     const team = db.dbTeam.create({ id: "team-up", name: "Old" });
     const before = sm.transactionQueue.pendingCount;
@@ -155,7 +155,7 @@ describe("createDb — update", () => {
 // delete
 // ---------------------------------------------------------------------------
 
-describe("createDb — delete", () => {
+describe("createStore — delete", () => {
   it("removes the record from the pool and enqueues a delete", () => {
     db.dbTeam.create({ id: "team-del", name: "Doomed" });
     const before = sm.transactionQueue.pendingCount;
@@ -191,7 +191,7 @@ describe("createDb — delete", () => {
 // Singular relation accessor (compiled from `link(...)`)
 // ---------------------------------------------------------------------------
 
-describe("createDb — singular relations resolve via the pool", () => {
+describe("createStore — singular relations resolve via the pool", () => {
   it("issue.team returns the team after both records are in the pool", () => {
     const team = db.dbTeam.create({ id: "team-rel", name: "Linked" });
     const issue = db.dbIssue.create({
@@ -211,7 +211,7 @@ describe("createDb — singular relations resolve via the pool", () => {
 // batch
 // ---------------------------------------------------------------------------
 
-describe("createDb — batch", () => {
+describe("createStore — batch", () => {
   it("opens / closes a batch around the writes inside fn", () => {
     db.dbTeam.create({ id: "team-batch-1", name: "A" });
     const queue = sm.transactionQueue;
@@ -321,7 +321,7 @@ describe("createDb — batch", () => {
 // peekAll
 // ---------------------------------------------------------------------------
 
-describe("createDb — peekAll", () => {
+describe("createStore — peekAll", () => {
   it("returns every record currently in the pool for that entity", () => {
     expect(db.dbTeam.peekAll()).toEqual([]);
 
@@ -339,7 +339,7 @@ describe("createDb — peekAll", () => {
 // peekByIndex
 // ---------------------------------------------------------------------------
 
-describe("createDb — peekByIndex", () => {
+describe("createStore — peekByIndex", () => {
   it("returns only pooled records where record[key] === value", () => {
     db.dbTeam.create({ id: "team-pbi-a", name: "A" });
     const issue1 = db.dbIssue.create({
@@ -371,7 +371,7 @@ describe("createDb — peekByIndex", () => {
 // watchAll / record.watch / relation.subscribe
 // ---------------------------------------------------------------------------
 
-describe("createDb — subscriptions", () => {
+describe("createStore — subscriptions", () => {
   it("watchAll fires on pool-level entity changes and unsubscribes cleanly", () => {
     const cb = vi.fn();
     const unsubscribe = db.dbTeam.watchAll(cb);
@@ -448,7 +448,7 @@ describe("createDb — subscriptions", () => {
   });
 });
 
-describe("createDb — refreshByIndex", () => {
+describe("createStore — refreshByIndex", () => {
   it("delegates to StoreManager.refreshCollection (diff-based, in-place)", async () => {
     const refresh = vi.spyOn(sm, "refreshCollection").mockResolvedValue([]);
 
@@ -462,7 +462,7 @@ describe("createDb — refreshByIndex", () => {
 // archive
 // ---------------------------------------------------------------------------
 
-describe("createDb — archive", () => {
+describe("createStore — archive", () => {
   it("delegates to StoreManager.archiveModel", () => {
     db.dbTeam.create({ id: "team-archive-1", name: "Soft" });
     const archive = vi.spyOn(sm, "archiveModel");
@@ -481,7 +481,7 @@ describe("createDb — archive", () => {
 // async readers — get / getByIds / getByIndex / getAll
 // ---------------------------------------------------------------------------
 
-describe("createDb — async readers", () => {
+describe("createStore — async readers", () => {
   it("get(id) delegates to StoreManager.getOrLoadById", async () => {
     const getOrLoadById = vi.spyOn(sm, "getOrLoadById").mockResolvedValue(null);
 
@@ -592,7 +592,7 @@ describe("createDb — async readers", () => {
 // refresh / refreshAll
 // ---------------------------------------------------------------------------
 
-describe("createDb — refresh", () => {
+describe("createStore — refresh", () => {
   it("refresh(ids) delegates to StoreManager.refreshModels", async () => {
     const refreshModels = vi
       .spyOn(sm, "refreshModels")
@@ -618,7 +618,7 @@ describe("createDb — refresh", () => {
 // record commit interface — save / hasUnsavedChanges / discardUnsavedChanges
 // ---------------------------------------------------------------------------
 
-describe("createDb — record commit interface", () => {
+describe("createStore — record commit interface", () => {
   it("exposes save / hasUnsavedChanges / discardUnsavedChanges on returned records", () => {
     const team = db.dbTeam.create({ id: "team-commit-1", name: "v1" });
     expect(typeof team.save).toBe("function");
@@ -656,7 +656,7 @@ describe("createDb — record commit interface", () => {
 // runUndoable
 // ---------------------------------------------------------------------------
 
-describe("createDb — runUndoable", () => {
+describe("createStore — runUndoable", () => {
   it("delegates to StoreManager.runUndoable and returns the wrapped value", async () => {
     const runUndoable = vi
       .spyOn(sm, "runUndoable")
@@ -692,7 +692,7 @@ describe("createDb — runUndoable", () => {
 // undo / redo
 // ---------------------------------------------------------------------------
 
-describe("createDb — undo / redo", () => {
+describe("createStore — undo / redo", () => {
   it("exposes live undoDepth / redoDepth getters", () => {
     expect(db.undoDepth).toBe(0);
     expect(db.redoDepth).toBe(0);
@@ -747,7 +747,7 @@ describe("createDb — undo / redo", () => {
 // seed
 // ---------------------------------------------------------------------------
 
-describe("createDb — seed", () => {
+describe("createStore — seed", () => {
   it("hydrates records into the pool without enqueuing transactions", () => {
     const before = sm.transactionQueue.pendingCount;
     const seeded = db.dbTeam.seed([

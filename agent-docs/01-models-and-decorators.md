@@ -2,7 +2,7 @@
 
 Models are defined as TypeScript classes decorated with metadata. That metadata — about which fields exist, what their types are, how they relate to other models — is the engine's schema. It drives everything: IndexedDB table structure, change tracking, relationship resolution, and cascade deletes.
 
-> **Schema-first alternative.** A second authoring path declares models as plain data via `defineSchema(...)` and produces a fully-typed `db.<entity>.*` API. Both paths compile to the same `ModelRegistry` shape and can coexist in one app — see [`11-schema-first-authoring.md`](11-schema-first-authoring.md).
+> **Schema-first alternative.** A second authoring path declares models as plain data via `defineSchema(...)` and produces a fully-typed `store.<entity>.*` API. Both paths compile to the same `ModelRegistry` shape and can coexist in one app — see [`11-schema-first-authoring.md`](11-schema-first-authoring.md).
 
 ## The ModelRegistry
 

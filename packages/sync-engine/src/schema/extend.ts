@@ -23,7 +23,7 @@ export type ExtensionMap<S extends SchemaDef> = {
  * Carries the schema generic and the *literal* `byEntity` shape so that
  * `MergedExtensionMembers` can read each `computed[name]` / `actions[name]`
  * function literal at the type level — that's how computed return types and
- * action signatures end up on the records returned by `db.<entity>`.
+ * action signatures end up on the records returned by `store.<entity>`.
  */
 export interface ExtensionDescriptor<
   S extends SchemaDef,
@@ -59,8 +59,8 @@ export function extend<S extends SchemaDef>(
 }
 
 // ---------------------------------------------------------------------------
-// Type-level merging — used by createDb to include extension members on the
-// record types returned from `db.<entity>.findById/create/update`.
+// Type-level merging — used by createStore to include extension members on the
+// record types returned from `store.<entity>.findById/create/update`.
 // ---------------------------------------------------------------------------
 
 type ComputedReturnsOf<Defs> = Defs extends {

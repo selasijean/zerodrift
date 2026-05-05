@@ -91,7 +91,7 @@ export function compileSchema(schema: SchemaDef): CompiledSchema {
 }
 
 /**
- * Entity keys that would collide with `db.<top-level>` methods (`db.batch`,
+ * Entity keys that would collide with `store.<top-level>` methods (`store.batch`,
  * future additions). Validation rejects these up front so a schema can't
  * silently shadow the typed surface.
  */
@@ -112,7 +112,7 @@ function validateSchema(schema: SchemaDef): void {
   for (const [key, entityDef] of Object.entries(schema.entities)) {
     if (RESERVED_DB_KEYS.has(key)) {
       errors.push(
-        `entity key "${key}" collides with the reserved top-level \`db.${key}\`. ` +
+        `entity key "${key}" collides with the reserved top-level \`store.${key}\`. ` +
           `Rename the entity (e.g. "${key}Entry") or override its registry name.`,
       );
     }

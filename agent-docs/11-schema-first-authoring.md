@@ -6,7 +6,7 @@ An alternative to the decorator path in [`01-models-and-decorators.md`](01-model
 import {
   defineSchema, entity, link, fields as s, LoadStrategy,
 } from "sync-engine/schema";
-import { createDb } from "sync-engine/schema";
+import { createStore } from "sync-engine/schema";
 
 export const schema = defineSchema({
   entities: {
@@ -36,9 +36,9 @@ export const schema = defineSchema({
   },
 });
 
-const db = createDb({ schema, storeManager });
+const store = createStore({ schema, storeManager });
 
-const issue = await db.issue.get("issue-1");
+const issue = await store.issue.get("issue-1");
 issue?.team;            // typed Team | null, resolved through the pool
 issue!.title = "Fix";
 issue!.save();
@@ -60,7 +60,7 @@ If your app authors models manually and doesn't need the above, decorators are s
 
 ### `defineSchema(...)`
 
-Returns a plain `SchemaDef`. Pure data; no side effects until you pass it to `createDb` or `compileSchema`.
+Returns a plain `SchemaDef`. Pure data; no side effects until you pass it to `createStore` or `compileSchema`.
 
 ### `entity(...)`
 
@@ -135,11 +135,11 @@ The compiler enforces these invariants and rejects the schema otherwise:
 - Each `s.refId(...)` field is referenced by at most one link.
 - `from.as` and `to.many` don't collide with declared field names.
 - Two entities don't compile to the same registry name.
-- Schema entity keys don't collide with reserved `db.*` top-level methods (`batch`, `undo`, `redo`, `undoDepth`, `redoDepth`, `runUndoable`).
+- Schema entity keys don't collide with reserved `store.*` top-level methods (`batch`, `undo`, `redo`, `undoDepth`, `redoDepth`, `runUndoable`).
 
-## The typed `db` surface
+## The typed `store` surface
 
-`createDb({ schema, storeManager, extensions? })` returns a typed namespace per entity, plus top-level transaction primitives.
+`createStore({ schema, storeManager, extensions? })` returns a typed namespace per entity, plus top-level transaction primitives.
 
 ### Reads
 
@@ -154,12 +154,12 @@ The default flavor is async (`get*`). The `peek*` family is the sync escape hatc
 `getByIndexValues(key, values[])` is the multi-value form — fans out one `getByIndex` call per value in parallel, dedupes, returns the union in input-`values` order. Useful for "issues for any of these teams" patterns. With `serverSupportsCompoundIndexKeys: true` + `onDemandIndexBatchFetcher` configured, the fan-out can collapse into one server round-trip when the values share a parent FK.
 
 ```typescript
-const issue = await db.issue.get(id);                  // pool-first; falls back to IDB / fetcher
-const team = db.team.peek(teamId);                     // sync; null means "not in pool"
-const teamIssues = await db.issue.getByIndex("teamId", teamId);
+const issue = await store.issue.get(id);                  // pool-first; falls back to IDB / fetcher
+const team = store.team.peek(teamId);                     // sync; null means "not in pool"
+const teamIssues = await store.issue.getByIndex("teamId", teamId);
 //                                          ^^^^^^^^ key is constrained to .indexed() fields
-const allTeams = await db.team.getAll();
-await db.issue.refreshByIndex("teamId", teamId);       // evict + reload, server-truth
+const allTeams = await store.team.getAll();
+await store.issue.refreshByIndex("teamId", teamId);       // evict + reload, server-truth
 ```
 
 `peek*` reads return whatever's in the pool right now — `null` doesn't mean "doesn't exist," it means "not currently hydrated." Use `get*` if you want the engine to fetch.
@@ -167,22 +167,22 @@ await db.issue.refreshByIndex("teamId", teamId);       // evict + reload, server
 ### Mutations
 
 ```typescript
-db.issue.create({ id?, title, teamId })                // returns the typed record
-db.issue.update(id, { title?, priority? })             // partial; throws if id not in pool
-db.issue.delete(id)                                    // cascade / restrict via onDelete
-db.issue.archive(id)                                   // soft-delete, same semantics
-db.issue.seed([{ id: "i1", ... }])                     // hydrate-into-pool, no transaction
+store.issue.create({ id?, title, teamId })             // returns the typed record
+store.issue.update(id, { title?, priority? })          // partial; throws if id not in pool
+store.issue.delete(id)                                 // cascade / restrict via onDelete
+store.issue.archive(id)                                // soft-delete, same semantics
+store.issue.seed([{ id: "i1", ... }])                  // hydrate-into-pool, no transaction
                                                        //   (for tests / stories)
 ```
 
-`update` requires the record to be in the pool. To update a lazy-loaded record, `await db.issue.get(id)` first.
+`update` requires the record to be in the pool. To update a lazy-loaded record, `await store.issue.get(id)` first.
 
 ### Per-record commit interface
 
 The records returned from `create` / `peek` / `get` carry a curated subset of `BaseModel`:
 
 ```typescript
-const issue = db.issue.peek(id)!;
+const issue = store.issue.peek(id)!;
 issue.title = "x";
 issue.priority = 2;
 issue.hasUnsavedChanges;        // true
@@ -190,15 +190,15 @@ issue.save();                   // single transaction with both fields
 issue.discardUnsavedChanges();  // revert to last-saved values
 ```
 
-This is how you batch imperative writes inside an event handler without going through `db.issue.update(id, ...)` per field.
+This is how you batch imperative writes inside an event handler without going through `store.issue.update(id, ...)` per field.
 
 ### Subscriptions
 
 Three primitives, all payload-less — the callback fires, you re-read. Returns an unsubscribe function.
 
 ```typescript
-db.issue.watchAll(() => { /* any pool change for Issue */ });
-db.issue.watchByIndex("teamId", teamId, () => { /* matching record added/removed */ });
+store.issue.watchAll(() => { /* any pool change for Issue */ });
+store.issue.watchByIndex("teamId", teamId, () => { /* matching record added/removed */ });
 issue.watch(r => r.title, (next, prev) => { /* this record's title changed */ });
 record.issues.subscribe(() => { /* relation collection's items changed */ });
 ```
@@ -207,24 +207,24 @@ record.issues.subscribe(() => { /* relation collection's items changed */ });
 
 Inside React, prefer the hooks ([typed React hooks](#typed-react-hooks) below). They wire the same primitives through `useSyncExternalStore`.
 
-### Top-level `db` methods
+### Top-level `store` methods
 
 ```typescript
-db.batch(fn): string                       // sync — fn() runs in one batchId
-db.batch(async fn): Promise<string>        // async — finally-fires endBatch even on throw
+store.batch(fn): string                    // sync — fn() runs in one batchId
+store.batch(async fn): Promise<string>     // async — finally-fires endBatch even on throw
 
-await db.undo();                           // returns UndoResult | null
-await db.redo();
-db.undoDepth;                              // live getter
-db.redoDepth;
+await store.undo();                        // returns UndoResult | null
+await store.redo();
+store.undoDepth;                           // live getter
+store.redoDepth;
 
-await db.runUndoable(
+await store.runUndoable(
   async () => { const { changeLogId } = await api.publish(); return { changeLogId }; },
   { actionType: "publish" },
 );
 ```
 
-Inside React, prefer `useUndoRedo()` and `useBatch()` — they subscribe to the queue so `canUndo`/`canRedo` are reactive. The `db.*` methods are the imperative path for headless code.
+Inside React, prefer `useUndoRedo()` and `useBatch()` — they subscribe to the queue so `canUndo`/`canRedo` are reactive. The `store.*` methods are the imperative path for headless code.
 
 ## Behavior extensions: `extend(...)`
 
@@ -245,10 +245,10 @@ const issueBehavior = extend(schema, "issue", {
   },
 });
 
-const db = createDb({ schema, storeManager, extensions: [issueBehavior] });
+const store = createStore({ schema, storeManager, extensions: [issueBehavior] });
 
-db.issue.peek(id)?.identifier;          // typed string
-db.issue.peek(id)?.moveToTeam("team-2");
+store.issue.peek(id)?.identifier;          // typed string
+store.issue.peek(id)?.moveToTeam("team-2");
 ```
 
 Whole-schema form is also accepted:
@@ -355,26 +355,26 @@ In `sync-engine/react`:
 
 ```typescript
 import {
-  useDbModel,
-  useDbModels,
-  useDbIndexedCollection,
-  useDbIndexedCollections,
+  useEntities,
+  useEntitiesByIndex,
+  useEntitiesByIndexValues,
+  useEntity,
 } from "sync-engine/react";
 
-const { item: issue } = useDbModel(db.issue, issueId);
-const { items: teams } = useDbModels(db.team);
-const { items: teamIssues } = useDbIndexedCollection(db.issue, "teamId", teamId);
+const { item: issue } = useEntity(store.issue, issueId);
+const { items: teams } = useEntities(store.team);
+const { items: teamIssues } = useEntitiesByIndex(store.issue, "teamId", teamId);
 //                                                            ^^^^^^^^ autocompletes to indexed fields only
 
 // Multi-value form — issues for any of these teams.
-const { items: myIssues } = useDbIndexedCollections(db.issue, "teamId", myTeamIds);
+const { items: myIssues } = useEntitiesByIndexValues(store.issue, "teamId", myTeamIds);
 ```
 
 Same return shape as the existing `useModel` / `useModels` / `useIndexedCollection` (`{ item | items, isLoading, error, reload }`); the schema-typed hooks just infer the record type and indexed-key constraint from the namespace. Internally they extract the registry name and delegate to the same `useSyncExternalStore` machinery, so reactivity is identical.
 
 ## What to expect at runtime
 
-A schema entity becomes a synthetic `BaseModel` subclass at compile time. The typed records returned from `db.<entity>.*` are real `BaseModel` instances; `RecordWithExtensions<S, K, Exts>` is a type-level projection of the same instance. That means:
+A schema entity becomes a synthetic `BaseModel` subclass at compile time. The typed records returned from `store.<entity>.*` are real `BaseModel` instances; `RecordWithExtensions<S, K, Exts>` is a type-level projection of the same instance. That means:
 
 - **Field reads** (e.g. `issue.title`) are MobX-tracked. Inside `observer()` they trigger re-renders.
 - **Relation collections** (e.g. `team.issues.items`) wire their own MobX boxes — reactive.
@@ -388,6 +388,6 @@ A schema entity becomes a synthetic `BaseModel` subclass at compile time. The ty
   - Codegen from Zod / OpenAPI / database schemas.
   - Schema introspection for devtools.
   - Single-declaration relationships (`link(...)`) instead of dual `@Reference` + `@ReferenceCollection`.
-  - Typed `db.<entity>.*` API surface end-to-end.
+  - Typed `store.<entity>.*` API surface end-to-end.
 
 Both paths compile to the same `ModelRegistry`, so you can mix them in one app — a decorator-defined `User` and a schema-defined `Comment` link cleanly via `entity({ external: true })`.
