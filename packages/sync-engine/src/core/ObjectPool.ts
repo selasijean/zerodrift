@@ -23,6 +23,10 @@ import type {
 } from "./LazyCollection";
 
 type Listener = () => void;
+interface Subscription {
+  predicate?: (model: BaseModel) => boolean;
+  listener: Listener;
+}
 
 /** A parent-side declaration that points back at a given child model type. */
 interface InverseDecl {
@@ -49,7 +53,7 @@ export class ObjectPool {
    * Subscribers per model type. When the pool changes for a given type,
    * all listeners for that type are called, triggering React re-renders.
    */
-  private listeners = new Map<string, Set<Listener>>();
+  private listeners = new Map<string, Set<Subscription>>();
 
   /**
    * Per-`(modelName, id)` MobX atoms. Each atom is bumped when the entry
@@ -94,21 +98,54 @@ export class ObjectPool {
     this.modelAtoms.get(`${modelName}:${id}`)?.reportChanged();
   }
 
-  /** Subscribe to changes for a model type. Returns an unsubscribe function. */
-  subscribe(modelName: string, listener: Listener): () => void {
+  /**
+   * Subscribe to changes for a model type. The optional `predicate` runs
+   * against the affected record on `put` / `remove` and the listener only
+   * fires when it returns true; `clear` always fires every listener since
+   * the affected record is gone by definition.
+   *
+   * Predicate filtering covers **set-membership changes** (a record was
+   * added or removed). It does NOT see field-level reassignments — a child
+   * moving between FK buckets via `child.teamId = "..."` goes through MobX
+   * boxes, not `notify`. Pair with `record.watch` if you need to react to
+   * field changes that cross a filter boundary.
+   *
+   * Returns an unsubscribe function.
+   */
+  subscribe(modelName: string, listener: Listener): () => void;
+  subscribe(
+    modelName: string,
+    predicate: (model: BaseModel) => boolean,
+    listener: Listener,
+  ): () => void;
+  subscribe(
+    modelName: string,
+    a: Listener | ((model: BaseModel) => boolean),
+    b?: Listener,
+  ): () => void {
+    const sub: Subscription =
+      b != null
+        ? { predicate: a as (model: BaseModel) => boolean, listener: b }
+        : { listener: a as Listener };
     if (!this.listeners.has(modelName)) {
       this.listeners.set(modelName, new Set());
     }
-    this.listeners.get(modelName)!.add(listener);
+    this.listeners.get(modelName)!.add(sub);
     return () => {
-      this.listeners.get(modelName)?.delete(listener);
+      this.listeners.get(modelName)?.delete(sub);
     };
   }
 
-  private notify(modelName: string) {
+  private notify(modelName: string, affected?: BaseModel) {
     const subs = this.listeners.get(modelName);
-    if (subs != null) {
-      subs.forEach((fn) => fn());
+    if (subs == null) {
+      return;
+    }
+    for (const sub of subs) {
+      if (sub.predicate != null && affected != null && !sub.predicate(affected)) {
+        continue;
+      }
+      sub.listener();
     }
   }
 
@@ -143,7 +180,7 @@ export class ObjectPool {
       });
     }
 
-    this.notify(modelName);
+    this.notify(modelName, instance);
   }
 
   /** Remove a model. Notifies subscribers. */
@@ -157,7 +194,7 @@ export class ObjectPool {
       this.snapshotCache.delete(modelName);
       this.notifyModelChanged(modelName, id);
     });
-    this.notify(modelName);
+    this.notify(modelName, instance);
   }
 
   getAll<T extends BaseModel = BaseModel>(modelName: string): T[] {

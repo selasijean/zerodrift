@@ -201,16 +201,28 @@ function useLoader(
   return { isLoading, error, reload };
 }
 
+/**
+ * Shared shape for the load-aware hooks: `item` / `items` / `value`
+ * payload plus the lifecycle bag (`isLoading`, `error`, `reload`).
+ * Internal — exposed via the individual hook return types.
+ */
+interface LoaderBase {
+  isLoading: boolean;
+  error: Error | null;
+  reload: () => Promise<void>;
+}
+interface LoaderItemResult<T> extends LoaderBase {
+  item: T | null;
+}
+interface LoaderItemsResult<T> extends LoaderBase {
+  items: T[];
+}
+
 /** Reactive single model by id. Pool-first sync read; async backfill on miss. */
 export function useModel<T extends BaseModel = BaseModel>(
   modelName: string,
   id: string | null | undefined,
-): {
-  item: T | null;
-  isLoading: boolean;
-  error: Error | null;
-  reload: () => Promise<void>;
-} {
+): LoaderItemResult<T> {
   const { sm, status } = useSyncEngine();
   const pool = sm.objectPool;
   const ready = status.phase === BootstrapPhase.Ready;
@@ -243,12 +255,7 @@ export function useModel<T extends BaseModel = BaseModel>(
 export function useModels<T extends BaseModel = BaseModel>(
   modelName: string,
   ids?: string[] | null,
-): {
-  items: T[];
-  isLoading: boolean;
-  error: Error | null;
-  reload: () => Promise<void>;
-} {
+): LoaderItemsResult<T> {
   const { sm, status } = useSyncEngine();
   const pool = sm.objectPool;
   const ready = status.phase === BootstrapPhase.Ready;
@@ -287,12 +294,7 @@ export function useIndexedCollection<T extends BaseModel = BaseModel>(
   modelName: string,
   indexKey: string,
   value: string | null | undefined,
-): {
-  items: T[];
-  isLoading: boolean;
-  error: Error | null;
-  reload: () => Promise<void>;
-} {
+): LoaderItemsResult<T> {
   const { sm, status } = useSyncEngine();
   const ready = status.phase === BootstrapPhase.Ready;
   const hasValue = value != null && value !== "";
@@ -470,4 +472,82 @@ function useStableCallback<TParams extends unknown[], TResult>(
   );
 
   return stableRef.current;
+}
+
+
+// ---------------------------------------------------------------------------
+// Typed schema-first hooks
+//
+// `useDbModel(db.<entity>, id)`, `useDbModels(db.<entity>, ids?)`, and
+// `useDbIndexedCollection(db.<entity>, key, value)` are schema-aware
+// counterparts of the string-keyed hooks above. They infer the record
+// type from the namespace and constrain the index key against the
+// schema's `.indexed()` fields. Internally they extract the registry
+// name from the namespace and delegate to the same primitives.
+// ---------------------------------------------------------------------------
+
+import {
+  entityNamespaceRegistryName,
+  type EntityNamespace,
+  type RecordWithExtensions,
+} from "../schema/createDb";
+import type { ExtensionDescriptor } from "../schema/extend";
+import type { EntityKey, IndexedFieldKeys } from "../schema/infer";
+import type { SchemaDef } from "../schema/types";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyNamespace = EntityNamespace<any, any, any>;
+
+type RecordOf<NS> = NS extends EntityNamespace<infer S, infer K, infer Exts>
+  ? S extends SchemaDef
+    ? K extends EntityKey<S>
+      ? Exts extends readonly ExtensionDescriptor<S>[]
+        ? RecordWithExtensions<S, K, Exts>
+        : never
+      : never
+    : never
+  : never;
+
+type IndexedKeysOf<NS> = NS extends EntityNamespace<infer S, infer K, infer _Exts>
+  ? S extends SchemaDef
+    ? K extends EntityKey<S>
+      ? IndexedFieldKeys<S, K>
+      : never
+    : never
+  : never;
+
+// `as unknown as` bridges the type-system gap between `BaseModel` (what the
+// underlying string-keyed hooks return) and `RecordOf<NS>` (the schema's
+// typed view of the same instance). They're literally the same object at
+// runtime — `RecordOf<NS>` is a structural projection of the `BaseModel`
+// in the pool — but neither type is assignable to the other (BaseModel
+// has internals like `__mobx`/`store`; RecordOf has schema fields like
+// `title`/`name` plus extension members). One cast per wrapper, contained.
+
+export function useDbModel<NS extends AnyNamespace>(
+  ns: NS,
+  id: string | null | undefined,
+): LoaderItemResult<RecordOf<NS>> {
+  return useModel(entityNamespaceRegistryName(ns), id) as unknown as
+    LoaderItemResult<RecordOf<NS>>;
+}
+
+export function useDbModels<NS extends AnyNamespace>(
+  ns: NS,
+  ids?: string[] | null,
+): LoaderItemsResult<RecordOf<NS>> {
+  return useModels(entityNamespaceRegistryName(ns), ids) as unknown as
+    LoaderItemsResult<RecordOf<NS>>;
+}
+
+export function useDbIndexedCollection<NS extends AnyNamespace>(
+  ns: NS,
+  indexKey: IndexedKeysOf<NS>,
+  value: string | null | undefined,
+): LoaderItemsResult<RecordOf<NS>> {
+  return useIndexedCollection(
+    entityNamespaceRegistryName(ns),
+    indexKey,
+    value,
+  ) as unknown as LoaderItemsResult<RecordOf<NS>>;
 }

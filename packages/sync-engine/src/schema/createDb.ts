@@ -171,6 +171,22 @@ export interface EntityNamespace<
    * `useSyncExternalStore`. This is the imperative path for headless code.
    */
   watchAll(cb: () => void): () => void;
+  /**
+   * Subscribe to pool-level changes filtered by `record[key] === value`.
+   * The pool runs the predicate at write-time and only invokes `cb` when a
+   * matching record was added or removed. Cheaper than `watchAll` followed
+   * by an in-handler `peekByIndex` filter.
+   *
+   * Caveat: this fires on **set-membership changes**, not field
+   * reassignments. A record moving between buckets via a setter
+   * (`record[key] = newValue`) goes through MobX boxes, not pool notify —
+   * pair with `record.watch(r => r[key], cb)` if you need that case too.
+   */
+  watchByIndex(
+    key: IndexedFieldKeys<S, K>,
+    value: string,
+    cb: () => void,
+  ): () => void;
 }
 
 /**
@@ -396,7 +412,7 @@ function createEntityNamespace(
     list: readonly BaseModel[],
   ): ReadonlyArray<Rec> => list.map(toRecord);
 
-  return {
+  const ns = {
     peek(id) {
       const model = sm.objectPool.getById(registryName, id);
       return model == null ? null : toRecord(model);
@@ -466,7 +482,35 @@ function createEntityNamespace(
     watchAll(cb) {
       return sm.objectPool.subscribe(registryName, cb);
     },
+    watchByIndex(key, value, cb) {
+      return sm.objectPool.subscribe(
+        registryName,
+        (m) => (m as unknown as Record<string, unknown>)[key] === value,
+        cb,
+      );
+    },
   };
+  // Stash the registry name on the namespace so the typed React hooks can
+  // recover it without forcing every callsite to repeat the string. Hidden
+  // from enumeration so it doesn't leak into JSON serialization or hover
+  // tooltips on the public surface.
+  Object.defineProperty(ns, REGISTRY_NAME, {
+    value: registryName,
+    enumerable: false,
+    writable: false,
+    configurable: false,
+  });
+  return ns;
+}
+
+/** @internal Symbol carrying the ModelRegistry name on each namespace. */
+export const REGISTRY_NAME: unique symbol = Symbol("syncEngine/registryName");
+
+/** @internal Read the registry name a namespace was built for. */
+export function entityNamespaceRegistryName(
+  ns: EntityNamespace<SchemaDef, string, readonly ExtensionDescriptor<SchemaDef>[]>,
+): string {
+  return (ns as unknown as { [REGISTRY_NAME]: string })[REGISTRY_NAME];
 }
 
 function requireInstance(

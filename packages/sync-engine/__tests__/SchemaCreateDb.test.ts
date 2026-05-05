@@ -394,6 +394,34 @@ describe("createDb — subscriptions", () => {
     expect(teamCb).not.toHaveBeenCalled();
   });
 
+  it("watchByIndex only fires for matching mutations (predicate filter)", () => {
+    const cb = vi.fn();
+    db.dbIssue.watchByIndex("teamId", "team-watched", cb);
+
+    // Non-matching create — should NOT fire.
+    db.dbIssue.create({ id: "issue-other", teamId: "team-other" });
+    expect(cb).not.toHaveBeenCalled();
+
+    // Matching create — SHOULD fire.
+    db.dbIssue.create({ id: "issue-match", teamId: "team-watched" });
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    // Non-matching teamId=null — should NOT fire.
+    cb.mockClear();
+    db.dbIssue.create({ id: "issue-null", teamId: null });
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("watchByIndex fires on remove of a matching record", () => {
+    db.dbIssue.create({ id: "issue-rm", teamId: "team-rm-watch" });
+    const cb = vi.fn();
+    db.dbIssue.watchByIndex("teamId", "team-rm-watch", cb);
+
+    db.dbIssue.delete("issue-rm");
+
+    expect(cb).toHaveBeenCalled();
+  });
+
   it("record.watch fires when the selected field changes", () => {
     const team = db.dbTeam.create({ id: "team-rw", name: "v1" });
     const cb = vi.fn();
