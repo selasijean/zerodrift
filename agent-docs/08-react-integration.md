@@ -72,6 +72,27 @@ const { value: favorite } = useBackRef<Favorite>(issue?.favorite);
 
 When you already have the parent model, these wrap its `RefCollection` / `OwnedRefs` / `BackRef` directly. The collection is passed by reference, not by name, so TypeScript narrows the element type from the model definition. The runtime collection objects own their loading state, and the inverse-link machinery (see [10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md)) keeps `items` / `value` in sync with the pool — no invalidate / reload needed on delta.
 
+## Schema-first hooks — `useDb*`
+
+If you author models via [`defineSchema(...)`](11-schema-first-authoring.md), three additional hooks accept the typed `db.<entity>` namespace directly. They infer the record type from the namespace and constrain the index key against the schema's `.indexed()` fields.
+
+```typescript
+import { useDbModel, useDbModels, useDbIndexedCollection } from "sync-engine/react";
+
+const { item: issue } = useDbModel(db.issue, issueId);
+//        ^? Issue inferred from the schema, including singular relations
+//           (issue.team) and reverse collections (team.issues.items).
+const { items: teams } = useDbModels(db.team);
+const { items: teamIssues } = useDbIndexedCollection(db.issue, "teamId", teamId);
+//                                                            ^^^^^^^^ autocompletes to
+//                                                                     fields actually
+//                                                                     marked .indexed().
+```
+
+Same return shape and reactivity contract as the string-keyed hooks (`{ item | items, isLoading, error, reload }`). Internally they extract the registry name from the namespace and delegate to `useModel` / `useModels` / `useIndexedCollection`, so the underlying `useSyncExternalStore + pool.subscribe` plumbing is identical — there's no separate runtime path.
+
+Both hook families coexist; pick whichever matches your authoring style. Decorator-defined models keep using the string-keyed hooks; schema-first apps pick up `useDb*` for autocomplete and the typed indexed-key constraint.
+
 ## useUndoRedo
 
 ```typescript

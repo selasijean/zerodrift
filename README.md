@@ -9,17 +9,18 @@ You bring the backend. The client speaks a small three-endpoint protocol — imp
 - **Local-first** — every read is sync against an in-memory `ObjectPool`; writes apply optimistically and reconcile with server deltas.
 - **Realtime** — multi-tab and multi-client sync via SSE. Other clients' edits show up without polling.
 - **Offline** — IndexedDB-backed; transactions queue while disconnected and replay on reconnect.
-- **Decorator-driven schema** — declare models once in TypeScript, get persistence, change tracking, relationships, and cascade deletes for free.
+- **Two authoring paths** — decorator classes for hand-written models, or `defineSchema(...)` for schema-as-data with a fully-typed `db.<entity>.*` API. Both compile to the same registry shape and coexist in one app.
 - **Batched undo/redo** — group writes into a single undoable action; `runUndoable(fn)` puts non-model server calls on the same stack.
 - **Headless** — no React or DOM dependency in the core. Run it in Node for agents, CLIs, or service-side workers.
 - **Bring your own backend** — three endpoints, no specific language or storage required.
 
-## Two packages
+## Three subpaths
 
 | Import | What's in it |
 |---|---|
 | `sync-engine` | `StoreManager`, `BaseModel`, decorators, `ObjectPool`, types. Vanilla TS — no React, no DOM. |
-| `sync-engine/react` | `<SyncProvider>` and hooks: `useModel`, `useModels`, `useIndexedCollection`, `useCollection`, `useBackRef`, `useUndoRedo`, `useBatch`, `useBootstrapStatus`. |
+| `sync-engine/schema` | `defineSchema`, `entity`, `link`, `s` (field builders), `extend`, `createDb`, Zod adapter (`fromZod` / `entityFromZod`). Schema-as-data authoring; produces a typed `db.<entity>.*` API. |
+| `sync-engine/react` | `<SyncProvider>` and hooks: `useModel`, `useModels`, `useIndexedCollection`, `useCollection`, `useBackRef`, `useUndoRedo`, `useBatch`, `useBootstrapStatus`. Schema-typed siblings: `useDbModel`, `useDbModels`, `useDbIndexedCollection`. |
 
 ## Define your models
 
@@ -66,6 +67,74 @@ export class Issue extends BaseModel {
 
 See [`agent-docs/01-models-and-decorators.md`](agent-docs/01-models-and-decorators.md) for the full decorator reference.
 
+## Schema-first authoring (alternative)
+
+The same models authored as plain data, with a typed `db.<entity>.*` API falling out of the schema:
+
+```ts
+import {
+  defineSchema, entity, link, fields as s, LoadStrategy,
+  createDb, extend,
+} from "sync-engine/schema";
+
+export const schema = defineSchema({
+  entities: {
+    team: entity({
+      loadStrategy: LoadStrategy.Instant,
+      fields: { id: s.id(), name: s.string() },
+    }),
+    issue: entity({
+      loadStrategy: LoadStrategy.Instant,
+      fields: {
+        id:       s.id(),
+        title:    s.string().default(""),
+        priority: s.number().default(0),
+        teamId:   s.refId("team").nullable().indexed(),
+      },
+    }),
+  },
+  links: {
+    issueTeam: link({
+      from: { entity: "issue", field: "teamId", as: "team" },
+      to:   { entity: "team",  many: "issues", lazy: true },
+      onDelete: "cascade",
+    }),
+  },
+});
+
+const db = createDb({ schema, storeManager: sm });
+
+// Reads — sync (peek) vs async (get) vs force-network (refresh):
+const team = db.team.peek(teamId);                              // pool snapshot, sync
+const issue = await db.issue.get(issueId);                      // pool-first, falls back to IDB / fetcher
+const allTeams = await db.team.getAll();
+const teamIssues = await db.issue.getByIndex("teamId", teamId); // key constrained to .indexed() fields
+
+// Writes — typed records with create/update/delete + per-record save:
+const issueA = db.issue.create({ title: "Fix bug", teamId: team!.id });
+db.issue.update(issueA.id, { priority: 1 });
+issueA.title = "Fix hydration bug"; issueA.save();
+
+// Subscriptions — payload-less, re-read inside the handler:
+db.issue.watchByIndex("teamId", teamId, () => {
+  const items = db.issue.peekByIndex("teamId", teamId);
+});
+```
+
+Behavior (computed + actions) lives outside the schema via `extend(...)` so the schema descriptor stays serializable:
+
+```ts
+const issueBehavior = extend(schema, "issue", {
+  computed: { identifier: (i) => `${i.priority}-${i.title.slice(0, 8)}` },
+  actions:  { moveToTeam(i, teamId: string) { i.teamId = teamId; } },
+});
+const db = createDb({ schema, storeManager: sm, extensions: [issueBehavior] });
+```
+
+Both authoring paths compile to the same `ModelRegistry`, so a schema entity can reference a decorator class via `entity({ external: true, name: "User" })` (and vice versa). Optional Zod adapter (`fromZod` / `entityFromZod`) lets you reuse Zod schemas as the field source.
+
+See [`agent-docs/11-schema-first-authoring.md`](agent-docs/11-schema-first-authoring.md) for the full reference.
+
 ## React quick start
 
 Wrap your app in `<SyncProvider>` once. Import your model file as a side-effect so the decorators run before bootstrap.
@@ -110,6 +179,19 @@ const { phase } = useBootstrapStatus();                      // engine lifecycle
 ```
 
 Pool-keyed hooks (`useModel`, `useModels`, `useIndexedCollection`) return `{ item | items, isLoading, error, reload }`. The collection-wrapper hooks (`useCollection`, `useBackRef`) wrap a runtime collection you already hold and additionally expose `isLoaded` (and return `value` for `useBackRef`).
+
+If you author models via `defineSchema(...)`, prefer the typed siblings — they take the `db.<entity>` namespace directly and infer the record type from the schema:
+
+```tsx
+import { useDbModel, useDbModels, useDbIndexedCollection } from "sync-engine/react";
+
+const { item: issue } = useDbModel(db.issue, issueId);
+const { items: teams } = useDbModels(db.team);
+const { items: teamIssues } = useDbIndexedCollection(db.issue, "teamId", teamId);
+//                                                            ^^^^^^^^ autocompletes to indexed fields only
+```
+
+Same return shape, same reactivity contract — the typed hooks are thin wrappers that resolve the registry name from the namespace and delegate to the string-keyed primitives.
 
 ### Writing data
 
@@ -404,6 +486,7 @@ Deeper material lives in [`agent-docs/`](agent-docs/):
 - [08 — React integration](agent-docs/08-react-integration.md)
 - [09 — Headless and agents](agent-docs/09-headless-and-agents.md)
 - [10 — Inverse links and reactivity](agent-docs/10-inverse-links-and-reactivity.md)
+- [11 — Schema-first authoring](agent-docs/11-schema-first-authoring.md)
 
 ## Reference backend and demo
 
