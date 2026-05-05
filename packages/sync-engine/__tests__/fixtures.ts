@@ -117,6 +117,8 @@ export function makeFakeStoreManager(
     getOrLoadByIds: async () => [],
     getOrLoadById: async () => null,
     mintId: overrides.mintId ?? (() => crypto.randomUUID()),
+    hasFieldTransforms: false,
+    applyTransform: (_instance, _propName, value) => value,
   } as unknown as StoreManager;
 }
 

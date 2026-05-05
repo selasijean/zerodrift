@@ -141,6 +141,18 @@ export interface ModelMeta {
   schemaVersion: number;
 }
 
+/**
+ * Transforms a value at the moment it's assigned via the property setter.
+ * Receives the model instance so it can read sibling fields, plus the live
+ * `StoreManager` context for tenant/user-scoped rewrites. Output replaces
+ * the original assignment value before the MobX box is updated.
+ */
+export type FieldTransform<TContext = unknown> = (
+  value: unknown,
+  instance: BaseModel,
+  ctx: TContext | undefined,
+) => unknown;
+
 /** Tracks what changed on a property: old value and new value. */
 export interface PropertyChange {
   oldValue: unknown;
@@ -208,6 +220,19 @@ export interface IStoreManager {
    * `StoreManagerConfig.identifierFn` if configured; otherwise falls back
    * to `crypto.randomUUID()`. */
   mintId(instance: BaseModel): string;
+  /** True iff `applyFieldTransforms` registered at least one transform.
+   * Setters check this before calling `applyTransform` so the no-config
+   * path stays a single boolean read on the assignment hot path. */
+  readonly hasFieldTransforms: boolean;
+  /** Run any registered field transform for `(instance, propName)` against
+   * `value` and return the result (or the value unchanged when no rule
+   * applies). The StoreManager owns the cache key shape and the context
+   * read so setters don't need to. */
+  applyTransform(
+    instance: BaseModel,
+    propName: string,
+    value: unknown,
+  ): unknown;
 }
 
 /**

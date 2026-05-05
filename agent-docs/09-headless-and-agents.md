@@ -97,6 +97,31 @@ await sm.bootstrap();
 
 Context is read on demand at id-mint time, not captured — re-call `setContext` whenever the relevant state changes. If `identifierFn` is omitted, ids fall back to `crypto.randomUUID()` and `setContext` is a no-op.
 
+## Field transforms — canonicalize values on assign
+
+`applyFieldTransforms` is the registry-walk companion to `identifierFn`: at engine init it visits every `(model, property)` pair and asks the rule whether to install a transform. Whatever it returns runs inside the property setter (`issue.teamId = x`), receiving `(value, instance, ctx)`. Use it to apply cross-cutting input rewrites — layer/tenant prefixing, string normalization — without sprinkling per-field decorators across every model.
+
+```typescript
+import { PropertyType, StoreManager } from "sync-engine";
+
+const sm = new StoreManager<AgentContext>({
+  workspaceId: "agent-1",
+  bootstrapFetcher,
+  applyFieldTransforms: (_meta, prop) => {
+    if (prop.type !== PropertyType.Reference) return undefined;
+    return (value, instance) => {
+      if (typeof value !== "string" || value === "" || value.includes("/")) {
+        return value;
+      }
+      const layerId = (instance as { layerId?: string }).layerId;
+      return layerId != null ? `${layerId}/${value}` : value;
+    };
+  },
+});
+```
+
+Storage is per-StoreManager — rebuilding the engine swaps the rules cleanly without mutating `ModelRegistry`. The rule is invoked at most once per property; the setter hot path early-exits when nothing was registered. Read sibling fields from `instance` first; fall back to `ctx` when the instance hasn't been hydrated yet.
+
 ## Reactivity Without React
 
 React's observer model (`useSyncExternalStore`, `useEffect`) doesn't exist in Node.js. The engine exposes three callback-based APIs for headless reactivity.

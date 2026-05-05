@@ -65,7 +65,9 @@ import {
   PropertyType,
   toError,
   type ModelMeta,
+  type PropertyMeta,
   type PropertyChange,
+  type FieldTransform,
   type EngineErrorContext,
   type EngineErrorHandler,
 } from "./types";
@@ -320,6 +322,26 @@ export interface StoreManagerConfig<TContext = unknown> {
   identifierFn?: (meta: ModelMeta, context: TContext | undefined) => string;
 
   /**
+   * Stamp a field transform onto each `(model, property)` pair at engine
+   * init. Walks every registered model exactly once; called per property,
+   * returning the transform to install or `undefined` for "no transform."
+   *
+   * The transform fires inside the property setter — `model.field = x` —
+   * before the value reaches the MobX box. It receives the assigned value,
+   * the model instance (so it can read sibling fields), and the live
+   * context. Use it to canonicalize cross-cutting input formats — e.g.
+   * prefix every FK with the current layer/tenant, normalize strings —
+   * without sprinkling per-field decorators across every model.
+   *
+   * Storage is per-StoreManager: rebuilding the engine swaps the rules
+   * cleanly, no global registry mutation.
+   */
+  applyFieldTransforms?: (
+    meta: ModelMeta,
+    prop: PropertyMeta,
+  ) => FieldTransform<TContext> | undefined;
+
+  /**
    * Hooks for undoing/redoing remote side-effects committed via non-model APIs
    * (bulk-mutation endpoints, server-side workflow runs, etc.). The engine
    * tracks these on the same undo stack as model transactions; when the user
@@ -357,6 +379,8 @@ export class StoreManager<TContext = unknown> {
   private modelStreams: ModelStream[] = [];
   private config: StoreManagerConfig<TContext>;
   private context: TContext | undefined = undefined;
+  private fieldTransforms = new Map<string, FieldTransform<TContext>>();
+  hasFieldTransforms = false;
   private _phase = BootstrapPhase.Idle;
   private _error: Error | null = null;
   private stopped = false;
@@ -420,6 +444,21 @@ export class StoreManager<TContext = unknown> {
           : config.onDemandIndexBatchFetcher;
       this.indexBatchLoader = new BatchModelLoader(fetcher);
     }
+    if (config.applyFieldTransforms != null) {
+      const apply = config.applyFieldTransforms;
+      for (const meta of ModelRegistry.allModels()) {
+        for (const prop of meta.properties.values()) {
+          const t = apply(meta, prop);
+          if (t != null) {
+            this.fieldTransforms.set(
+              StoreManager.fieldTransformKey(meta.name, prop.name),
+              t,
+            );
+          }
+        }
+      }
+      this.hasFieldTransforms = this.fieldTransforms.size > 0;
+    }
     BaseModel.storeManager = this; // wire auto-commit
   }
 
@@ -431,6 +470,28 @@ export class StoreManager<TContext = unknown> {
    * thin wrapper over this. */
   setContext(ctx: TContext): void {
     this.context = ctx;
+  }
+
+  /** Apply any registered field transform for `(instance, propName)` against
+   * `value`, returning the result (or `value` unchanged when no rule applies).
+   * Setters short-circuit on `hasFieldTransforms` first — by the time this
+   * runs we know at least one rule exists somewhere in the engine. */
+  applyTransform(instance: BaseModel, propName: string, value: unknown): unknown {
+    const modelName = (instance.constructor as { _modelName?: string })._modelName;
+    if (modelName == null) {
+      return value;
+    }
+    const transform = this.fieldTransforms.get(
+      StoreManager.fieldTransformKey(modelName, propName),
+    );
+    if (transform == null) {
+      return value;
+    }
+    return transform(value, instance, this.context);
+  }
+
+  private static fieldTransformKey(modelName: string, propName: string): string {
+    return `${modelName}:${propName}`;
   }
 
   /** Mint a fresh id, honoring `identifierFn` when configured. Folds the
@@ -2220,6 +2281,8 @@ export class StoreManager<TContext = unknown> {
     this.fullyLoadedModels.clear();
     this.loadedIds.clear();
     this.poolSyncedFromIDB.clear();
+    this.fieldTransforms.clear();
+    this.hasFieldTransforms = false;
     this.setPhase(BootstrapPhase.Idle);
   }
 

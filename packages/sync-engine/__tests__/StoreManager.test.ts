@@ -12,7 +12,7 @@ import {
   RestrictDeleteError,
   type BootstrapResponse,
 } from "@sync-engine/StoreManager";
-import { BootstrapPhase } from "@sync-engine/types";
+import { BootstrapPhase, PropertyType } from "@sync-engine/types";
 import {
   TestTask,
   TestProject,
@@ -1384,6 +1384,114 @@ describe("StoreManager", () => {
       expect(fn).not.toHaveBeenCalled();
       expect(typeof id).toBe("string");
       expect(id.length).toBeGreaterThan(10);
+    });
+  });
+
+  // ── applyFieldTransforms ──────────────────────────────────────────────────
+
+  describe("applyFieldTransforms", () => {
+    it("hasFieldTransforms is false and applyTransform is identity when no rule is configured", () => {
+      expect(manager.hasFieldTransforms).toBe(false);
+      const task = new TestTask();
+      expect(manager.applyTransform(task, "title", "x")).toBe("x");
+    });
+
+    it("rule is consulted once per (model, property) at construction, never again", () => {
+      const rule = vi.fn((_meta, prop) =>
+        prop.type === PropertyType.Reference
+          ? (value: unknown) =>
+              typeof value === "string" && value !== ""
+                ? `prefix:${value}`
+                : value
+          : undefined,
+      );
+      const sm = new StoreManager({
+        workspaceId: "ws",
+        bootstrapFetcher: vi.fn(),
+        applyFieldTransforms: rule,
+      });
+
+      expect(sm.hasFieldTransforms).toBe(true);
+      const callsAfterCtor = rule.mock.calls.length;
+
+      const task = new TestTask();
+      sm.applyTransform(task, "projectId", "p-1");
+      sm.applyTransform(task, "projectId", "p-2");
+      expect(rule.mock.calls.length).toBe(callsAfterCtor);
+    });
+
+    it("applyTransform leaves values for unmatched properties unchanged", () => {
+      const sm = new StoreManager({
+        workspaceId: "ws",
+        bootstrapFetcher: vi.fn(),
+        applyFieldTransforms: (_meta, prop) =>
+          prop.type === PropertyType.Reference
+            ? (value: unknown) => `transformed:${String(value)}`
+            : undefined,
+      });
+
+      const task = new TestTask();
+      expect(sm.applyTransform(task, "title", "raw")).toBe("raw");
+      expect(sm.applyTransform(task, "projectId", "p-1")).toBe("transformed:p-1");
+    });
+
+    it("rewrites assigned values through the property setter", () => {
+      const sm = new StoreManager({
+        workspaceId: "ws",
+        bootstrapFetcher: vi.fn(),
+        applyFieldTransforms: (_meta, prop) =>
+          prop.type === PropertyType.Reference
+            ? (value) =>
+                typeof value === "string" && value !== "" && !value.includes("/")
+                  ? `layer-1/${value}`
+                  : value
+            : undefined,
+      });
+      // Wire so BaseModel setters consult this StoreManager.
+      void sm;
+
+      const task = new TestTask();
+      task.makeModelObservable();
+
+      task.projectId = "p-1";
+      expect(task.projectId).toBe("layer-1/p-1");
+
+      // Idempotent — already-prefixed values stay as-is.
+      task.projectId = "layer-1/p-2";
+      expect(task.projectId).toBe("layer-1/p-2");
+
+      // Non-Reference fields aren't transformed.
+      task.title = "Untouched";
+      expect(task.title).toBe("Untouched");
+    });
+
+    it("transform receives the model instance and the live context", () => {
+      type Ctx = { tenant: string };
+      const seen: Array<{ value: unknown; instance: unknown; ctx: unknown }> =
+        [];
+      const sm = new StoreManager<Ctx>({
+        workspaceId: "ws",
+        bootstrapFetcher: vi.fn(),
+        applyFieldTransforms: (_meta, prop) =>
+          prop.type === PropertyType.Reference
+            ? (value, instance, ctx) => {
+                seen.push({ value, instance, ctx });
+                return value;
+              }
+            : undefined,
+      });
+      sm.setContext({ tenant: "acme" });
+
+      const task = new TestTask();
+      task.makeModelObservable();
+      const baseline = seen.length; // makeModelObservable replays default-value setters
+      task.projectId = "p-1";
+
+      const fromAssign = seen.slice(baseline);
+      expect(fromAssign).toHaveLength(1);
+      expect(fromAssign[0]!.value).toBe("p-1");
+      expect(fromAssign[0]!.instance).toBe(task);
+      expect(fromAssign[0]!.ctx).toEqual({ tenant: "acme" });
     });
   });
 });

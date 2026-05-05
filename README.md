@@ -246,6 +246,36 @@ type AppContext = { userId: string; tenantId: string };
 
 `identifierFn` only fires for client-side `new Model()` construction — records hydrated from the server or IndexedDB carry their own ids. Context is sampled at mint time, so handlers fired in the same commit as a context change see the fresh value.
 
+### Field transforms — canonicalize values on assign
+
+`applyFieldTransforms` walks every registered model once at engine init and stamps a transform onto matching properties. The transform fires inside the property setter (`issue.teamId = x`), so consumers can rewrite cross-cutting input formats without per-field decorators on every model.
+
+Use case: a multi-layer app where ids are namespaced as `<layerId>/<id>` and you want bare `"team-42"` assignments to auto-prefix with the issue's own layer:
+
+```ts
+import { PropertyType, StoreManager } from "sync-engine";
+
+const sm = new StoreManager({
+  workspaceId,
+  bootstrapFetcher,
+  applyFieldTransforms: (_meta, prop) => {
+    if (prop.type !== PropertyType.Reference) return undefined;
+    return (value, instance) => {
+      if (typeof value !== "string" || value === "" || value.includes("/")) {
+        return value;
+      }
+      const layerId = (instance as { layerId?: string }).layerId;
+      return layerId != null ? `${layerId}/${value}` : value;
+    };
+  },
+});
+
+issue.teamId = "team-42";          // → "layer-prod/team-42"
+issue.teamId = "layer-prod/team-42"; // already prefixed; left alone
+```
+
+The rule is consulted once per `(model, property)` pair at construction. The setter hot path skips the lookup entirely when no rule was configured. Transform receives `(value, instance, context)` — read sibling fields off the instance, fall back to context for cases where the instance hasn't been hydrated yet.
+
 ### Reading data
 
 ```tsx

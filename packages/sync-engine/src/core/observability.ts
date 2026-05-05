@@ -9,11 +9,18 @@
  *   3. Calls `this.propertyChanged(name, oldValue, newValue)` to feed
  *      the change-tracking system that generates transactions
  *
+ * Before any of that, if a wired `StoreManager` has registered field
+ * transforms via `applyFieldTransforms`, the assigned value is routed
+ * through `sm.applyTransform` so consumers can canonicalize input on the
+ * way in. The `hasFieldTransforms` short-circuit keeps the no-config
+ * setter path a single boolean read.
+ *
  * The getter reads from the MobX box if it exists, otherwise returns
  * the raw stored value (for pre-bootstrap access before observability is on).
  */
 
 import { observable } from "mobx";
+import { BaseModel } from "./BaseModel";
 
 export function defineObservableProperty(target: object, propName: string) {
   // Raw storage key — holds the value before the MobX box is created
@@ -36,6 +43,11 @@ export function defineObservableProperty(target: object, propName: string) {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     set(this: any, newValue: any) {
+      const sm = BaseModel.storeManager;
+      if (sm != null && sm.hasFieldTransforms) {
+        newValue = sm.applyTransform(this, propName, newValue);
+      }
+
       const oldValue = this[propName]; // read via getter above
 
       // Create the __mobx container if it doesn't exist yet
