@@ -10,6 +10,7 @@
  */
 
 import type { BaseModel } from "./BaseModel";
+import { hashString } from "./hash";
 import {
   type ModelMeta,
   type PropertyMeta,
@@ -273,13 +274,7 @@ class ModelRegistryImpl {
       ].join(":");
     });
 
-    // Simple string hash
-    const raw = parts.join("|");
-    let hash = 0;
-    for (let i = 0; i < raw.length; i++) {
-      hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0;
-    }
-    this.cachedHash = Math.abs(hash).toString(36);
+    this.cachedHash = hashString(parts.join("|")).toString(36);
     return this.cachedHash;
   }
 }

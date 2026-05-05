@@ -21,30 +21,17 @@ import { defineObservableProperty } from "./observability";
 import {
   PropertyType,
   LoadStrategy,
-  type IObjectPool,
   type PropertyMeta,
   type ModelMeta,
 } from "./types";
-import type { LazyCollectionBase, BackRef } from "./LazyCollection";
+import {
+  installBackRefAccessor,
+  installCollectionAccessor,
+  installReferenceAccessor,
+} from "./refAccessors";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Ctor = new (...args: any[]) => any;
-
-// `this`-binding shapes used by the runtime accessors below. Kept narrow so
-// decorators.ts doesn't need to import BaseModel (which would create a cycle).
-
-interface RefHolder {
-  store: IObjectPool | null;
-  [key: string]: unknown;
-}
-
-interface CollectionHolder {
-  __collections?: Record<string, LazyCollectionBase>;
-}
-
-interface BackRefHolder {
-  __backRefs?: Record<string, BackRef>;
-}
 
 // Side-table for property/action/computed metadata declared via decorators.
 // Property decorators run during class-body evaluation — BEFORE @ClientModel
@@ -271,25 +258,7 @@ function defineReference(
       idField: idKey,
     });
 
-    Object.defineProperty(target, key, {
-      configurable: true,
-      enumerable: false,
-      get(this: RefHolder) {
-        const id = this[idKey];
-        if (typeof id !== "string" || id === "") {
-          return null;
-        }
-        // Register a tracked dependency on the pool entry so MobX observers
-        // re-run when the target is removed or its pool slot is replaced — not
-        // just when the FK changes. Closes the gap where a deletion or in-place
-        // identity swap would leave observers reading a stale value.
-        this.store?.trackModel(referenceTo, id);
-        return this.store?.getById(referenceTo, id) ?? null;
-      },
-      set(this: RefHolder, model: { id: string } | null) {
-        this[idKey] = model != null ? model.id : null;
-      },
-    });
+    installReferenceAccessor(target, key, idKey, referenceTo);
   };
 }
 
@@ -356,13 +325,7 @@ function defineReferenceCollection(
       coveringIndexes: opts.coveringIndexes,
     });
 
-    Object.defineProperty(target, key, {
-      configurable: true,
-      enumerable: false,
-      get(this: CollectionHolder) {
-        return this.__collections?.[key] ?? null;
-      },
-    });
+    installCollectionAccessor(target, key);
   };
 }
 
@@ -402,13 +365,7 @@ export function BackReference(referenceTo: string, inverseOf: string) {
       inverseOf,
     });
 
-    Object.defineProperty(target, key, {
-      configurable: true,
-      enumerable: false,
-      get(this: BackRefHolder) {
-        return this.__backRefs?.[key] ?? null;
-      },
-    });
+    installBackRefAccessor(target, key);
   };
 }
 
@@ -466,13 +423,7 @@ function defineOwnedCollection(
       lazy,
     });
 
-    Object.defineProperty(target, key, {
-      configurable: true,
-      enumerable: false,
-      get(this: CollectionHolder) {
-        return this.__collections?.[key] ?? null;
-      },
-    });
+    installCollectionAccessor(target, key);
   };
 }
 
