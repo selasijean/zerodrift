@@ -270,6 +270,51 @@ describe("createDb — batch", () => {
     expect(end).toHaveBeenCalledTimes(1);
     expect(db.dbTeam.findById("team-batch-4")?.name).toBe("J");
   });
+
+  it("allows delete calls to join an outer db.batch", () => {
+    db.dbTeam.create({ id: "team-batch-del", name: "Delete Me" });
+    db.dbIssue.create({
+      id: "issue-batch-del",
+      teamId: "team-batch-del",
+    });
+
+    const queue = sm.transactionQueue;
+    const begin = vi.spyOn(queue, "beginBatch");
+    const end = vi.spyOn(queue, "endBatch");
+
+    expect(() =>
+      db.batch(() => {
+        db.dbTeam.delete("team-batch-del");
+      }),
+    ).not.toThrow();
+
+    expect(begin).toHaveBeenCalledTimes(1);
+    expect(end).toHaveBeenCalledTimes(1);
+    expect(db.dbTeam.findById("team-batch-del")).toBeNull();
+    expect(db.dbIssue.findById("issue-batch-del")).toBeNull();
+  });
+
+  it("rejects nested batches instead of overwriting the active batch", () => {
+    db.dbTeam.create({ id: "team-batch-nested", name: "Outer" });
+
+    expect(() =>
+      db.batch(() => {
+        db.dbTeam.update("team-batch-nested", { name: "Inner" });
+        db.batch(() => {
+          db.dbTeam.update("team-batch-nested", { name: "NeverRuns" });
+        });
+      }),
+    ).toThrow(/Nested batches are not supported/);
+
+    // The outer batch still closes cleanly, so future batches can proceed.
+    expect(db.dbTeam.findById("team-batch-nested")?.name).toBe("Inner");
+    expect(() =>
+      db.batch(() => {
+        db.dbTeam.update("team-batch-nested", { name: "Recovered" });
+      }),
+    ).not.toThrow();
+    expect(db.dbTeam.findById("team-batch-nested")?.name).toBe("Recovered");
+  });
 });
 
 // ---------------------------------------------------------------------------

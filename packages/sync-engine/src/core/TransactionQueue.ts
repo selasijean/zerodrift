@@ -149,6 +149,12 @@ export class TransactionQueue {
   // ── Batch API ─────────────────────────────────────────────────────────────
 
   beginBatch(): string {
+    if (this.activeBatchId != null) {
+      throw new Error(
+        `Nested batches are not supported. Active batch "${this.activeBatchId}" ` +
+          `must end before opening another batch.`,
+      );
+    }
     const batchId = crypto.randomUUID();
     this.activeBatchId = batchId;
     this.activeBatchEntries = [];
@@ -173,6 +179,10 @@ export class TransactionQueue {
     }
     this.activeBatchId = null;
     this.activeBatchEntries = [];
+  }
+
+  get hasActiveBatch(): boolean {
+    return this.activeBatchId != null;
   }
 
   // ── Enqueue methods (one per transaction type) ────────────────────────────

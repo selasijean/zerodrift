@@ -879,12 +879,16 @@ export class StoreManager {
       );
     }
 
-    const batchId = this.transactionQueue.beginBatch();
+    const batchId = this.transactionQueue.hasActiveBatch
+      ? null
+      : this.transactionQueue.beginBatch();
     try {
       this.cascadeDeleteClient(meta.name, model.id);
       this.transactionQueue.enqueueDelete(model);
     } finally {
-      this.transactionQueue.endBatch(batchId);
+      if (batchId != null) {
+        this.transactionQueue.endBatch(batchId);
+      }
     }
   }
 
@@ -905,12 +909,16 @@ export class StoreManager {
       );
     }
 
-    const batchId = this.transactionQueue.beginBatch();
+    const batchId = this.transactionQueue.hasActiveBatch
+      ? null
+      : this.transactionQueue.beginBatch();
     try {
       this.cascadeArchiveClient(meta.name, model.id);
       this.transactionQueue.enqueueArchive(model);
     } finally {
-      this.transactionQueue.endBatch(batchId);
+      if (batchId != null) {
+        this.transactionQueue.endBatch(batchId);
+      }
     }
   }
 

@@ -192,4 +192,22 @@ describe("external entity validation", () => {
       ),
     ).toThrow(/external: true requires an explicit name/);
   });
+
+  it("rejects external entities whose registry name is not registered", () => {
+    expect(() =>
+      compileSchema(
+        defineSchema({
+          entities: {
+            missingExtern: entity({
+              external: true,
+              name: "DoesNotExist",
+              loadStrategy: LoadStrategy.Instant,
+              fields: { id: s.id() },
+            }),
+          },
+          links: {},
+        }),
+      ),
+    ).toThrow(/external model "DoesNotExist" is not registered/);
+  });
 });

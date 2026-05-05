@@ -122,6 +122,12 @@ function validateSchema(schema: SchemaDef): void {
       );
     }
     const name = entityDef.name ?? pascalCase(key);
+    if (entityDef.external === true && ModelRegistry.getModelMeta(name) == null) {
+      errors.push(
+        `entity "${key}": external model "${name}" is not registered in ` +
+          `ModelRegistry. Import/run its @ClientModel definition before compiling the schema.`,
+      );
+    }
     if (seenRegistryNames.has(name)) {
       errors.push(
         `Two entities compile to the same registry name "${name}". ` +
