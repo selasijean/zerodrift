@@ -333,6 +333,22 @@ const schema = defineSchema({
 
 `fromZod(zSchema)` returns a `FieldBuilder` for a single Zod schema; `entityFromZod(zObject, opts)` walks `zObject.shape` and produces an `EntityDef`. The adapter handles primitives (`string` / `number` / `boolean` / `date`) plus the `nullable` / `optional` / `default` modifiers; structured Zod types (objects, arrays, enums, unions) collapse to `s.json<T>()` so the runtime stores the raw value while TS types still flow from `z.infer`.
 
+Zod doesn't carry FK or index metadata, so use `opts.fields` to layer that on per-field — either as a chaining function (modifies the auto-derived builder) or a full replacement (typically for FKs):
+
+```typescript
+entityFromZod(ZodIssue, {
+  loadStrategy: LoadStrategy.Instant,
+  name: "Issue",
+  fields: {
+    teamId:    s.refId("team").nullable().indexed(),  // full replacement
+    email:     (b) => b.indexed(),                     // chain on auto-derived
+    draftNote: (b) => b.ephemeral(),
+  },
+});
+```
+
+Override keys are constrained to fields actually declared on the Zod object, so typos surface at compile time.
+
 ## Typed React hooks
 
 In `sync-engine/react`:

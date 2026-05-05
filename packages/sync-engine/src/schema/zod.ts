@@ -88,19 +88,46 @@ type FieldsFromZodObject<Z extends z.ZodObject> = {
   [K in keyof z.infer<Z>]: FieldBuilder<z.infer<Z>[K]>;
 };
 
-export interface EntityFromZodOpts {
+/**
+ * Per-field override for `entityFromZod`. Either a chaining function
+ * (modifies the auto-derived `FieldBuilder`) or a full `FieldBuilder`
+ * (replaces it — useful for FKs and other shapes Zod can't model).
+ */
+export type EntityFromZodFieldOverride =
+  | AnyFieldBuilder
+  | ((auto: AnyFieldBuilder) => AnyFieldBuilder);
+
+export interface EntityFromZodOpts<Z extends z.ZodObject = z.ZodObject> {
   loadStrategy: LoadStrategy;
   usedForPartialIndexes?: boolean;
   /** Override the registry name. Defaults to PascalCase of the entity key at compile time. */
   name?: string;
   /** Forces a schemaVersion override. Otherwise computed by the compiler. */
   version?: number;
+  /**
+   * Per-field overrides applied after the Zod-derived `FieldBuilder`.
+   * Keys are constrained to fields actually declared on the Zod object,
+   * so typos surface at compile time.
+   *
+   *     entityFromZod(ZodIssue, {
+   *       loadStrategy: LoadStrategy.Instant,
+   *       fields: {
+   *         teamId:    s.refId("team").nullable().indexed(),  // replace
+   *         email:     (b) => b.indexed(),                     // chain
+   *         draftNote: (b) => b.ephemeral(),
+   *       },
+   *     });
+   */
+  fields?: Partial<
+    Record<keyof z.infer<Z> & string, EntityFromZodFieldOverride>
+  >;
 }
 
 /**
  * Convert a `z.object({ ... })` into an `EntityDef`. Each key on the Zod
- * object becomes a field via `fromZod`. Supply non-Zod metadata —
- * `loadStrategy`, `name`, etc. — through the second argument.
+ * object becomes a field via `fromZod`, then `opts.fields[key]` (if
+ * present) is applied — either chained onto the auto-derived builder, or
+ * used as a full replacement.
  *
  * Only single-record entities are produced; relations still belong in the
  * schema's `links` block. Treat the Zod object as the source of field
@@ -109,11 +136,17 @@ export interface EntityFromZodOpts {
  */
 export function entityFromZod<Z extends z.ZodObject>(
   zSchema: Z,
-  opts: EntityFromZodOpts,
+  opts: EntityFromZodOpts<Z>,
 ): EntityDef<FieldsFromZodObject<Z>> {
+  const overrides = opts.fields ?? {};
   const fieldsRecord: Record<string, AnyFieldBuilder> = {};
   for (const [key, fieldSchema] of Object.entries(zSchema.shape)) {
-    fieldsRecord[key] = key === "id" ? fields.id() : fromZod(fieldSchema);
+    const auto = key === "id" ? fields.id() : fromZod(fieldSchema);
+    const override = (overrides as Record<string, EntityFromZodFieldOverride>)[key];
+    fieldsRecord[key] =
+      typeof override === "function"
+        ? override(auto)
+        : (override ?? auto);
   }
   return entity({
     loadStrategy: opts.loadStrategy,

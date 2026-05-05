@@ -24,7 +24,7 @@ export type {
 } from "./extend";
 
 export { fromZod, entityFromZod } from "./zod";
-export type { EntityFromZodOpts } from "./zod";
+export type { EntityFromZodFieldOverride, EntityFromZodOpts } from "./zod";
 
 export type {
   EntityDef,

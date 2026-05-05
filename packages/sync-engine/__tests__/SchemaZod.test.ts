@@ -220,3 +220,97 @@ describe("entityFromZod — link()-side FKs still come from s.refId", () => {
     expect(optionalField.meta.nullable).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// entityFromZod — per-field overrides via opts.fields
+// ---------------------------------------------------------------------------
+
+describe("entityFromZod — per-field overrides", () => {
+  const ZodOverridable = z.object({
+    id:    z.string(),
+    title: z.string(),
+    email: z.string(),
+    teamId: z.string(),
+    draftNote: z.string(),
+  });
+
+  it("chains modifiers via the function form", () => {
+    const def = entityFromZod(ZodOverridable, {
+      loadStrategy: LoadStrategy.Instant,
+      name: "OverrideChain",
+      fields: {
+        email: (b) => b.indexed(),
+        draftNote: (b) => b.ephemeral(),
+      },
+    });
+    expect(def.fields.email.meta.kind).toBe("string");
+    expect(def.fields.email.meta.indexed).toBe(true);
+    expect(def.fields.draftNote.meta.ephemeral).toBe(true);
+    // Untouched field keeps its auto-derived shape.
+    expect(def.fields.title.meta.kind).toBe("string");
+    expect(def.fields.title.meta.indexed).toBe(false);
+  });
+
+  it("replaces the auto-derived field via the builder form (FK case)", () => {
+    const def = entityFromZod(ZodOverridable, {
+      loadStrategy: LoadStrategy.Instant,
+      name: "OverrideReplace",
+      fields: {
+        teamId: s.refId("team").nullable().indexed(),
+      },
+    });
+    expect(def.fields.teamId.meta.kind).toBe("refId");
+    expect(def.fields.teamId.meta.refTarget).toBe("team");
+    expect(def.fields.teamId.meta.nullable).toBe(true);
+    expect(def.fields.teamId.meta.indexed).toBe(true);
+  });
+
+  it("compiles end-to-end with both override forms in one entity", () => {
+    const schema = defineSchema({
+      entities: {
+        team: entityFromZod(z.object({ id: z.string(), name: z.string() }), {
+          loadStrategy: LoadStrategy.Instant,
+          name: "OverrideEndToEndTeam",
+        }),
+        issue: entityFromZod(ZodOverridable, {
+          loadStrategy: LoadStrategy.Instant,
+          name: "OverrideEndToEndIssue",
+          fields: {
+            teamId: s.refId("team").nullable().indexed(),
+            email: (b) => b.indexed(),
+          },
+        }),
+      },
+      links: {
+        issueTeam: link({
+          from: { entity: "issue", field: "teamId", as: "team" },
+          to: { entity: "team", many: "issues", lazy: true },
+          onDelete: "cascade",
+        }),
+      },
+    });
+    expect(() => compileSchema(schema)).not.toThrow();
+
+    const teamId = ModelRegistry.getModelMeta(
+      "OverrideEndToEndIssue",
+    )!.properties.get("teamId")!;
+    expect(teamId.type).toBe(PropertyType.Reference);
+    expect(teamId.referenceTo).toBe("OverrideEndToEndTeam");
+    expect(teamId.indexed).toBe(true);
+
+    const email = ModelRegistry.getModelMeta(
+      "OverrideEndToEndIssue",
+    )!.properties.get("email")!;
+    expect(email.indexed).toBe(true);
+  });
+
+  // Type-level: typos in the `fields` override map fail to compile.
+  it("constrains override keys to fields actually declared on the Zod object", () => {
+    type FieldsArg = NonNullable<
+      Parameters<typeof entityFromZod<typeof ZodOverridable>>[1]["fields"]
+    >;
+    expectTypeOf<keyof FieldsArg>().toEqualTypeOf<
+      "id" | "title" | "email" | "teamId" | "draftNote"
+    >();
+  });
+});
