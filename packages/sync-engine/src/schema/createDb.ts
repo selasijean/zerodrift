@@ -36,6 +36,20 @@ export interface RecordCommitInterface {
   readonly hasUnsavedChanges: boolean;
   /** Drop pending changes and reset to the last-saved values. */
   discardUnsavedChanges(): void;
+  /**
+   * MobX-tracked subscription. The selector reads any reactive field or
+   * derivation on this record; `cb` fires whenever its result changes.
+   * Returns an unsubscribe function.
+   *
+   *     record.watch(r => r.title, (next, prev) => …)
+   *
+   * Inside React, prefer `useModel` / `useCollection` — they wire the same
+   * thing through `useSyncExternalStore`. This is the imperative path.
+   */
+  watch<T>(
+    selector: (record: this) => T,
+    cb: (next: T, prev: T) => void,
+  ): () => void;
 }
 
 export type RecordWithExtensions<
@@ -146,6 +160,17 @@ export interface EntityNamespace<
     key: IndexedFieldKeys<S, K>,
     value: string,
   ): Promise<ReadonlyArray<RecordWithExtensions<S, K, Exts>>>;
+
+  // ── Subscriptions ────────────────────────────────────────────────────────
+  /**
+   * Subscribe to pool-level changes for this entity. The callback fires
+   * payload-less — re-read with `peekAll` / `peekByIndex` / `peek` inside
+   * the handler. Returns an unsubscribe function.
+   *
+   * Inside React, prefer `useModels` — it wires the same primitive through
+   * `useSyncExternalStore`. This is the imperative path for headless code.
+   */
+  watchAll(cb: () => void): () => void;
 }
 
 /**
@@ -437,6 +462,9 @@ function createEntityNamespace(
       // instances are updated in place so held references stay valid.
       const list = await sm.refreshCollection(registryName, key, value);
       return recordsFrom(list);
+    },
+    watchAll(cb) {
+      return sm.objectPool.subscribe(registryName, cb);
     },
   };
 }

@@ -367,6 +367,59 @@ describe("createDb — peekByIndex", () => {
 // refreshByIndex
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// watchAll / record.watch / relation.subscribe
+// ---------------------------------------------------------------------------
+
+describe("createDb — subscriptions", () => {
+  it("watchAll fires on pool-level entity changes and unsubscribes cleanly", () => {
+    const cb = vi.fn();
+    const unsubscribe = db.dbTeam.watchAll(cb);
+
+    db.dbTeam.create({ id: "team-watch-1", name: "A" });
+    expect(cb).toHaveBeenCalled();
+
+    cb.mockClear();
+    unsubscribe();
+    db.dbTeam.create({ id: "team-watch-2", name: "B" });
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("watchAll only fires for the entity it subscribed to", () => {
+    const teamCb = vi.fn();
+    db.dbTeam.watchAll(teamCb);
+
+    db.dbIssue.create({ id: "issue-watch-iso", teamId: null });
+
+    expect(teamCb).not.toHaveBeenCalled();
+  });
+
+  it("record.watch fires when the selected field changes", () => {
+    const team = db.dbTeam.create({ id: "team-rw", name: "v1" });
+    const cb = vi.fn();
+    const unsubscribe = team.watch((t) => t.name, cb);
+
+    db.dbTeam.update("team-rw", { name: "v2" });
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    // MobX reaction passes (next, prev, Reaction) — typed signature hides the
+    // third arg, so assert positionally rather than via toHaveBeenCalledWith.
+    const [next, prev] = cb.mock.calls[0];
+    expect(next).toBe("v2");
+    expect(prev).toBe("v1");
+    unsubscribe();
+  });
+
+  it("relation collection subscribe is exposed via the typed surface", () => {
+    const team = db.dbTeam.create({ id: "team-coll-sub", name: "T" });
+    const cb = vi.fn();
+    const unsubscribe = team.issues.subscribe(cb);
+
+    expect(typeof unsubscribe).toBe("function");
+    unsubscribe();
+  });
+});
+
 describe("createDb — refreshByIndex", () => {
   it("delegates to StoreManager.refreshCollection (diff-based, in-place)", async () => {
     const refresh = vi.spyOn(sm, "refreshCollection").mockResolvedValue([]);

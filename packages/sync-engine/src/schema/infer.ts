@@ -54,6 +54,12 @@ export type EntityFieldsRecord<
 export interface RelationCollection<T> {
   load(): Promise<readonly T[]>;
   readonly items: readonly T[];
+  /**
+   * Fires whenever the collection's items list changes (records added,
+   * removed, or replaced). Payload-less — re-read `items` inside `cb`.
+   * Returns an unsubscribe function.
+   */
+  subscribe(cb: () => void): () => void;
 }
 
 type EntityFieldTypes<S extends SchemaDef, K extends EntityKey<S>> = {
