@@ -423,7 +423,7 @@ export const schema = defineSchema({
 **Collision rules:**
 
 - Hard error if two definitions claim the same registry name with incompatible field/relation metadata.
-- Allowed if a definition is marked as a compatibility alias during migration (`entity({ name: "Issue", aliasOf: "Issue" })` — implementation detail, sketched only).
+- Allowed if a definition is marked as external — `entity({ name: "Issue", external: true, ... })` tells the compiler to skip class generation, property registration, and reverse-collection installs for that entity. The decorator-registered class stays canonical; the schema entity exists only so cross-references and types can resolve against the registry name. This is the V1 coexistence story.
 
 **Migration recipe:**
 

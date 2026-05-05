@@ -174,12 +174,12 @@ function createEntityNamespace(
       const instance = new Ctor();
       // BaseModel.update routes through hydrate+save when store is null,
       // which fires commitCreate via BaseModel.storeManager.
-      (instance as BaseModel).update(input as Record<string, unknown>);
-      return toRecord(instance as BaseModel);
+      instance.update(input);
+      return toRecord(instance);
     },
     update(id, input) {
       const model = requireInstance(sm, registryName, id, "update");
-      model.update(input as Record<string, unknown>);
+      model.update(input);
     },
     delete(id) {
       const model = requireInstance(sm, registryName, id, "delete");

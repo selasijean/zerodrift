@@ -41,8 +41,12 @@ export function compileSchema(schema: SchemaDef): CompiledSchema {
 
   const nameByKey = resolveNames(schema);
   const ctorByKey = new Map<string, typeof BaseModel>();
+  const externalKeys = collectExternalKeys(schema);
 
   for (const [key, entityDef] of Object.entries(schema.entities)) {
+    if (externalKeys.has(key)) {
+      continue;
+    }
     const name = nameByKey.get(key)!;
     const ctor = createSyntheticClass(name, entityDef);
     ctorByKey.set(key, ctor);
@@ -56,6 +60,9 @@ export function compileSchema(schema: SchemaDef): CompiledSchema {
   }
 
   for (const [key, entityDef] of Object.entries(schema.entities)) {
+    if (externalKeys.has(key)) {
+      continue;
+    }
     const name = nameByKey.get(key)!;
     const ctor = ctorByKey.get(key)!;
     for (const [fieldName, builder] of Object.entries(entityDef.fields)) {
@@ -64,11 +71,11 @@ export function compileSchema(schema: SchemaDef): CompiledSchema {
   }
 
   for (const linkDef of Object.values(schema.links)) {
-    registerLink(linkDef, ctorByKey, nameByKey);
+    registerLink(linkDef, externalKeys, ctorByKey, nameByKey);
   }
 
   for (const [key, entityDef] of Object.entries(schema.entities)) {
-    if (entityDef.version != null) {
+    if (externalKeys.has(key) || entityDef.version != null) {
       continue;
     }
     const name = nameByKey.get(key)!;
@@ -89,6 +96,12 @@ function validateSchema(schema: SchemaDef): void {
 
   const seenRegistryNames = new Set<string>();
   for (const [key, entityDef] of Object.entries(schema.entities)) {
+    if (entityDef.external === true && entityDef.name == null) {
+      errors.push(
+        `entity "${key}": external: true requires an explicit name so the ` +
+          `compiler can resolve cross-references against the existing registry entry.`,
+      );
+    }
     const name = entityDef.name ?? pascalCase(key);
     if (seenRegistryNames.has(name)) {
       errors.push(
@@ -214,6 +227,16 @@ function addRelationName(
   }
 }
 
+function collectExternalKeys(schema: SchemaDef): ReadonlySet<string> {
+  const out = new Set<string>();
+  for (const [key, entityDef] of Object.entries(schema.entities)) {
+    if (entityDef.external === true) {
+      out.add(key);
+    }
+  }
+  return out;
+}
+
 function resolveNames(schema: SchemaDef): Map<string, string> {
   const out = new Map<string, string>();
   for (const [key, entityDef] of Object.entries(schema.entities)) {
@@ -310,39 +333,51 @@ function registerField(
 
 function registerLink(
   linkDef: AnyLinkDef,
+  externalKeys: ReadonlySet<string>,
   ctorByKey: ReadonlyMap<string, typeof BaseModel>,
   nameByKey: ReadonlyMap<string, string>,
 ): void {
+  const fromExternal = externalKeys.has(linkDef.from.entity);
+  const toExternal = externalKeys.has(linkDef.to.entity);
   const fromName = nameByKey.get(linkDef.from.entity)!;
   const toName = nameByKey.get(linkDef.to.entity)!;
-  const fromCtor = ctorByKey.get(linkDef.from.entity)!;
-  const toCtor = ctorByKey.get(linkDef.to.entity)!;
+  const fromCtor = ctorByKey.get(linkDef.from.entity);
+  const toCtor = ctorByKey.get(linkDef.to.entity);
   const fkField = linkDef.from.field;
   const asField = linkDef.from.as;
   const manyField = linkDef.to.many;
 
-  const refUpdates: Partial<PropertyMeta> = { lazy: true };
-  if (linkDef.onDelete != null) {
-    refUpdates.onDelete = linkDef.onDelete;
+  // From-side updates only apply when the source entity is owned by this
+  // schema; for external sources we leave the FK property untouched on the
+  // foreign class to avoid clobbering decorator-defined metadata.
+  if (!fromExternal && fromCtor != null) {
+    const refUpdates: Partial<PropertyMeta> = { lazy: true };
+    if (linkDef.onDelete != null) {
+      refUpdates.onDelete = linkDef.onDelete;
+    }
+    ModelRegistry.updateProperty(fromName, fkField, refUpdates);
+
+    ModelRegistry.registerProperty(fromName, {
+      name: asField,
+      type: PropertyType.ReferenceModel,
+      referenceTo: toName,
+      idField: fkField,
+    });
+    installReferenceAccessor(fromCtor.prototype, asField, fkField, toName);
   }
-  ModelRegistry.updateProperty(fromName, fkField, refUpdates);
 
-  ModelRegistry.registerProperty(fromName, {
-    name: asField,
-    type: PropertyType.ReferenceModel,
-    referenceTo: toName,
-    idField: fkField,
-  });
-  installReferenceAccessor(fromCtor.prototype, asField, fkField, toName);
-
-  ModelRegistry.registerProperty(toName, {
-    name: manyField,
-    type: PropertyType.ReferenceCollection,
-    referenceTo: fromName,
-    lazy: linkDef.to.lazy ?? true,
-    inverseOf: fkField,
-  });
-  installCollectionAccessor(toCtor.prototype, manyField);
+  // To-side reverse-collection only when the target entity is owned by this
+  // schema. Schema → decorator links don't pollute the decorator's prototype.
+  if (!toExternal && toCtor != null) {
+    ModelRegistry.registerProperty(toName, {
+      name: manyField,
+      type: PropertyType.ReferenceCollection,
+      referenceTo: fromName,
+      lazy: linkDef.to.lazy ?? true,
+      inverseOf: fkField,
+    });
+    installCollectionAccessor(toCtor.prototype, manyField);
+  }
 }
 
 function hashEntityMeta(meta: ModelMeta): number {

@@ -51,6 +51,15 @@ export interface EntityDef<
   name?: string;
   /** Forces a schemaVersion override. Otherwise computed by the compiler. */
   version?: number;
+  /**
+   * Marks this entity as registered elsewhere (typically by `@ClientModel`).
+   * The compiler skips class generation and property/link registration for
+   * external entities, but still allows other schema entities to reference
+   * them via `s.refId(...)` and `link({ to: { entity: ... } })`. `name` must
+   * be set explicitly so the schema can resolve cross-references against the
+   * existing registry entry.
+   */
+  external?: boolean;
   fields: F;
 }
 
