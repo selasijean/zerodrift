@@ -437,7 +437,7 @@ describe("compileSchema — validation failures", () => {
     "redoDepth",
     "runUndoable",
   ] as const)(
-    "rejects entity key %s — collides with reserved db top-level",
+    "rejects entity key %s — collides with reserved store top-level",
     (reservedKey) => {
       expect(() =>
         compileSchema(
@@ -453,7 +453,7 @@ describe("compileSchema — validation failures", () => {
         ),
       ).toThrow(
         new RegExp(
-          `entity key "${reservedKey}" collides with the reserved top-level \`db\\.${reservedKey}\``,
+          `entity key "${reservedKey}" collides with the reserved top-level \`store\\.${reservedKey}\``,
         ),
       );
     },
