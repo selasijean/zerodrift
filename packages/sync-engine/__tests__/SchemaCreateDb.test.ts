@@ -208,6 +208,71 @@ describe("createDb — singular relations resolve via the pool", () => {
 });
 
 // ---------------------------------------------------------------------------
+// batch
+// ---------------------------------------------------------------------------
+
+describe("createDb — batch", () => {
+  it("opens / closes a batch around the writes inside fn", () => {
+    db.dbTeam.create({ id: "team-batch-1", name: "A" });
+    const queue = sm.transactionQueue;
+    const begin = vi.spyOn(queue, "beginBatch");
+    const end = vi.spyOn(queue, "endBatch");
+    const before = queue.pendingCount;
+
+    const batchId = db.batch(() => {
+      db.dbTeam.update("team-batch-1", { name: "B" });
+      db.dbTeam.update("team-batch-1", { name: "C" });
+    });
+
+    expect(begin).toHaveBeenCalledTimes(1);
+    expect(end).toHaveBeenCalledExactlyOnceWith(batchId);
+    expect(queue.pendingCount).toBe(before + 2);
+    expect(db.dbTeam.findById("team-batch-1")?.name).toBe("C");
+  });
+
+  it("returns the batchId from a sync batch", () => {
+    db.dbTeam.create({ id: "team-batch-2", name: "X" });
+    const batchId = db.batch(() => {
+      db.dbTeam.update("team-batch-2", { name: "Y" });
+    });
+    expect(typeof batchId).toBe("string");
+    expect(batchId.length).toBeGreaterThan(0);
+  });
+
+  it("supports async functions and resolves to the batchId", async () => {
+    db.dbTeam.create({ id: "team-batch-3", name: "P" });
+    const end = vi.spyOn(sm.transactionQueue, "endBatch");
+
+    const result = db.batch(async () => {
+      db.dbTeam.update("team-batch-3", { name: "Q" });
+      await Promise.resolve();
+      db.dbTeam.update("team-batch-3", { name: "R" });
+    });
+    expect(result).toBeInstanceOf(Promise);
+
+    const batchId = await result;
+    expect(typeof batchId).toBe("string");
+    expect(end).toHaveBeenCalledWith(batchId);
+    expect(db.dbTeam.findById("team-batch-3")?.name).toBe("R");
+  });
+
+  it("ends the batch even when fn throws", () => {
+    db.dbTeam.create({ id: "team-batch-4", name: "I" });
+    const end = vi.spyOn(sm.transactionQueue, "endBatch");
+
+    expect(() =>
+      db.batch(() => {
+        db.dbTeam.update("team-batch-4", { name: "J" });
+        throw new Error("boom");
+      }),
+    ).toThrow(/boom/);
+
+    expect(end).toHaveBeenCalledTimes(1);
+    expect(db.dbTeam.findById("team-batch-4")?.name).toBe("J");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // seed
 // ---------------------------------------------------------------------------
 

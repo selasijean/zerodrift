@@ -52,12 +52,30 @@ export interface EntityNamespace<
   ): ReadonlyArray<RecordWithExtensions<S, K, Exts>>;
 }
 
+/**
+ * Top-level `db` methods that aren't entity namespaces. Kept on a sibling
+ * intersection so `Db<S>` stays "one entry per entity key" — the only
+ * collision is if a schema declares an entity literally named `batch`.
+ */
+export interface DbTopLevel {
+  /**
+   * Run `fn` inside a transaction batch. Every `db.<entity>.create / update /
+   * delete` call inside shares a single `batchId`, ships in one HTTP POST,
+   * and reverses as one unit on undo. Returns the `batchId`.
+   *
+   * Accepts both sync and async functions — `endBatch` always fires after
+   * the function (or its returned Promise) completes, even on throw.
+   */
+  batch(fn: () => void): string;
+  batch(fn: () => Promise<void>): Promise<string>;
+}
+
 export type Db<
   S extends SchemaDef,
   Exts extends readonly ExtensionDescriptor<S>[] = readonly [],
 > = {
   [K in EntityKey<S>]: EntityNamespace<S, K, Exts>;
-};
+} & DbTopLevel;
 
 interface ExtensionBucket {
   computed: Record<string, ComputedFn<SchemaDef, string>>;
@@ -89,10 +107,9 @@ export function createDb<
     applyExtension(registryName, defs);
   }
 
-  const db: Record<
-    string,
-    EntityNamespace<SchemaDef, string, readonly ExtensionDescriptor<S>[]>
-  > = {};
+  const db: Record<string, unknown> = {
+    batch: sm.batch.bind(sm) as DbTopLevel["batch"],
+  };
   for (const [entityKey, registryName] of compiled.nameByKey) {
     db[entityKey] = createEntityNamespace(registryName, sm);
   }

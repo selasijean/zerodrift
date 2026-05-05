@@ -90,12 +90,25 @@ export function compileSchema(schema: SchemaDef): CompiledSchema {
   };
 }
 
+/**
+ * Entity keys that would collide with `db.<top-level>` methods (`db.batch`,
+ * future additions). Validation rejects these up front so a schema can't
+ * silently shadow the typed surface.
+ */
+const RESERVED_DB_KEYS: ReadonlySet<string> = new Set(["batch"]);
+
 function validateSchema(schema: SchemaDef): void {
   const errors: string[] = [];
   const entityKeys = new Set(Object.keys(schema.entities));
 
   const seenRegistryNames = new Set<string>();
   for (const [key, entityDef] of Object.entries(schema.entities)) {
+    if (RESERVED_DB_KEYS.has(key)) {
+      errors.push(
+        `entity key "${key}" collides with a reserved \`db.${key}(...)\` method. ` +
+          `Rename the entity (e.g. "${key}Entry") or override its registry name.`,
+      );
+    }
     if (entityDef.external === true && entityDef.name == null) {
       errors.push(
         `entity "${key}": external: true requires an explicit name so the ` +
