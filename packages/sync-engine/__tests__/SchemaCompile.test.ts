@@ -429,19 +429,26 @@ describe("compileSchema — validation failures", () => {
     ).toThrow(/FK "badI\.otherId" is referenced by 2 links/);
   });
 
-  it("rejects entity keys that collide with reserved db top-level methods", () => {
-    expect(() =>
-      compileSchema(
-        defineSchema({
-          entities: {
-            batch: entity({
-              loadStrategy: LoadStrategy.Instant,
-              fields: { id: s.id() },
-            }),
-          },
-          links: {},
-        }),
-      ),
-    ).toThrow(/entity key "batch" collides with a reserved `db\.batch/);
-  });
+  it.each(["batch", "undo", "redo", "undoDepth", "redoDepth"] as const)(
+    "rejects entity key %s — collides with reserved db top-level",
+    (reservedKey) => {
+      expect(() =>
+        compileSchema(
+          defineSchema({
+            entities: {
+              [reservedKey]: entity({
+                loadStrategy: LoadStrategy.Instant,
+                fields: { id: s.id() },
+              }),
+            },
+            links: {},
+          }),
+        ),
+      ).toThrow(
+        new RegExp(
+          `entity key "${reservedKey}" collides with the reserved top-level \`db\\.${reservedKey}\``,
+        ),
+      );
+    },
+  );
 });

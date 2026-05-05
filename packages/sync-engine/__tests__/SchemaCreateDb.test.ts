@@ -273,6 +273,61 @@ describe("createDb — batch", () => {
 });
 
 // ---------------------------------------------------------------------------
+// undo / redo
+// ---------------------------------------------------------------------------
+
+describe("createDb — undo / redo", () => {
+  it("exposes live undoDepth / redoDepth getters", () => {
+    expect(db.undoDepth).toBe(0);
+    expect(db.redoDepth).toBe(0);
+
+    db.dbTeam.create({ id: "team-undo-1", name: "first" });
+
+    expect(db.undoDepth).toBeGreaterThan(0);
+    expect(db.redoDepth).toBe(0);
+  });
+
+  it("undo reverts the most recent batch and bumps redoDepth", async () => {
+    db.dbTeam.create({ id: "team-undo-2", name: "before" });
+    db.batch(() => {
+      db.dbTeam.update("team-undo-2", { name: "after" });
+    });
+    expect(db.dbTeam.findById("team-undo-2")?.name).toBe("after");
+
+    const beforeRedo = db.redoDepth;
+    await db.undo();
+
+    expect(db.dbTeam.findById("team-undo-2")?.name).toBe("before");
+    expect(db.redoDepth).toBe(beforeRedo + 1);
+  });
+
+  it("redo replays the undone batch", async () => {
+    db.dbTeam.create({ id: "team-undo-3", name: "v1" });
+    db.dbTeam.update("team-undo-3", { name: "v2" });
+    expect(db.dbTeam.findById("team-undo-3")?.name).toBe("v2");
+
+    await db.undo();
+    expect(db.dbTeam.findById("team-undo-3")?.name).toBe("v1");
+
+    await db.redo();
+    expect(db.dbTeam.findById("team-undo-3")?.name).toBe("v2");
+    expect(db.redoDepth).toBe(0);
+  });
+
+  it("delegates to the StoreManager's undo / redo", async () => {
+    const undoSpy = vi.spyOn(sm, "undo");
+    const redoSpy = vi.spyOn(sm, "redo");
+
+    db.dbTeam.create({ id: "team-undo-4", name: "x" });
+    await db.undo();
+    await db.redo();
+
+    expect(undoSpy).toHaveBeenCalledTimes(1);
+    expect(redoSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // seed
 // ---------------------------------------------------------------------------
 

@@ -5,6 +5,7 @@ import {
   installComputedAccessor,
 } from "../core/refAccessors";
 import type { StoreManager } from "../core/StoreManager";
+import type { UndoResult } from "../core/TransactionQueue";
 import { compileSchema } from "./compile";
 import type {
   ActionFn,
@@ -54,8 +55,13 @@ export interface EntityNamespace<
 
 /**
  * Top-level `db` methods that aren't entity namespaces. Kept on a sibling
- * intersection so `Db<S>` stays "one entry per entity key" — the only
- * collision is if a schema declares an entity literally named `batch`.
+ * intersection so `Db<S>` stays "one entry per entity key" — the schema
+ * compiler reserves these names so an entity can't shadow them.
+ *
+ * For React, prefer `useUndoRedo()` from `sync-engine/react` — it
+ * subscribes to the transaction queue so `canUndo` / `canRedo` are
+ * reactive. These methods are the imperative path for non-React
+ * consumers (CLI tools, headless agents, tests).
  */
 export interface DbTopLevel {
   /**
@@ -68,6 +74,14 @@ export interface DbTopLevel {
    */
   batch(fn: () => void): string;
   batch(fn: () => Promise<void>): Promise<string>;
+  /** Pop and revert the top of the undo stack. */
+  undo(): Promise<UndoResult | null>;
+  /** Re-apply the top of the redo stack. */
+  redo(): Promise<UndoResult | null>;
+  /** Number of entries currently on the undo stack. */
+  readonly undoDepth: number;
+  /** Number of entries currently on the redo stack. */
+  readonly redoDepth: number;
 }
 
 export type Db<
@@ -109,6 +123,14 @@ export function createDb<
 
   const db: Record<string, unknown> = {
     batch: sm.batch.bind(sm) as DbTopLevel["batch"],
+    undo: () => sm.undo(),
+    redo: () => sm.redo(),
+    get undoDepth() {
+      return sm.transactionQueue.undoDepth;
+    },
+    get redoDepth() {
+      return sm.transactionQueue.redoDepth;
+    },
   };
   for (const [entityKey, registryName] of compiled.nameByKey) {
     db[entityKey] = createEntityNamespace(registryName, sm);

@@ -95,7 +95,13 @@ export function compileSchema(schema: SchemaDef): CompiledSchema {
  * future additions). Validation rejects these up front so a schema can't
  * silently shadow the typed surface.
  */
-const RESERVED_DB_KEYS: ReadonlySet<string> = new Set(["batch"]);
+const RESERVED_DB_KEYS: ReadonlySet<string> = new Set([
+  "batch",
+  "undo",
+  "redo",
+  "undoDepth",
+  "redoDepth",
+]);
 
 function validateSchema(schema: SchemaDef): void {
   const errors: string[] = [];
@@ -105,7 +111,7 @@ function validateSchema(schema: SchemaDef): void {
   for (const [key, entityDef] of Object.entries(schema.entities)) {
     if (RESERVED_DB_KEYS.has(key)) {
       errors.push(
-        `entity key "${key}" collides with a reserved \`db.${key}(...)\` method. ` +
+        `entity key "${key}" collides with the reserved top-level \`db.${key}\`. ` +
           `Rename the entity (e.g. "${key}Entry") or override its registry name.`,
       );
     }
