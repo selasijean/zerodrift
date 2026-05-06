@@ -17,6 +17,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { StoreManager } from "@sync-engine/StoreManager";
 import { MemoryAdapter } from "@sync-engine/MemoryAdapter";
 import { BaseModel } from "@sync-engine/BaseModel";
+import { ModelRegistry } from "@sync-engine/ModelRegistry";
 import { TestActivity, TestNote } from "./fixtures";
 
 let manager: StoreManager;
@@ -291,5 +292,215 @@ describe("StoreManager.getOrLoadAll", () => {
     });
     // Same set, same coverage entry — only one server fetch.
     expect(bootstrap).toHaveBeenCalledTimes(1);
+  });
+
+  describe("in-flight delta merge", () => {
+    it("preserves an SSE-delivered insert when the snapshot has older data for the same id", async () => {
+      const adapter = new MemoryAdapter();
+      const meta = ModelRegistry.getModelMeta("TestActivity")!;
+      let bootstrapCallNum = 0;
+      const bootstrap = vi.fn(async (_type, options) => {
+        bootstrapCallNum++;
+        // First call is the engine's own bootstrap (no `onlyModels`).
+        if (!options?.onlyModels?.includes("TestActivity")) {
+          return {
+            lastSyncId: 0,
+            subscribedSyncGroups: [] as string[],
+            models: {} as Record<string, Record<string, unknown>[]>,
+          };
+        }
+        // The getOrLoadAll fetch — simulate SSE arriving mid-flight by
+        // performing the writes the SSE pipeline would do.
+        await adapter.writeModels("TestActivity", [
+          { id: "a-newer", taskId: "t1", text: "from-sse" },
+        ]);
+        manager.objectPool.hydrateAndPut("TestActivity", meta, {
+          id: "a-newer",
+          taskId: "t1",
+          text: "from-sse",
+        });
+        return {
+          lastSyncId: 1,
+          subscribedSyncGroups: [] as string[],
+          models: {
+            TestActivity: [
+              { id: "a-newer", taskId: "t1", text: "older-snapshot" },
+              { id: "a-fresh", taskId: "t1", text: "fresh" },
+            ],
+          },
+        };
+      });
+      manager = new StoreManager({
+        workspaceId: crypto.randomUUID(),
+        bootstrapFetcher: bootstrap,
+        storageAdapter: adapter,
+      });
+      await manager.bootstrap();
+
+      const result =
+        await manager.getOrLoadAll<TestActivity>("TestActivity");
+      const byId = new Map(result.map((a) => [a.id, a]));
+
+      // SSE-delivered version wins in the pool.
+      expect(byId.get("a-newer")?.text).toBe("from-sse");
+      // Snapshot-only records still hydrate normally.
+      expect(byId.get("a-fresh")?.text).toBe("fresh");
+
+      // IDB also keeps the SSE-newer copy.
+      const stored = await adapter.readAllModels("TestActivity");
+      const storedById = new Map(stored.map((r) => [r.id as string, r]));
+      expect(storedById.get("a-newer")?.text).toBe("from-sse");
+      expect(storedById.get("a-fresh")?.text).toBe("fresh");
+
+      expect(bootstrapCallNum).toBe(2);
+    });
+
+    it("drops snapshot records whose id was deleted during the in-flight window", async () => {
+      const adapter = new MemoryAdapter();
+      const bootstrap = vi.fn(async (_type, options) => {
+        if (!options?.onlyModels?.includes("TestActivity")) {
+          return {
+            lastSyncId: 0,
+            subscribedSyncGroups: [] as string[],
+            models: {} as Record<string, Record<string, unknown>[]>,
+          };
+        }
+        // Simulate an SSE delete for `a-deleted` that arrived mid-flight:
+        // IDB delete + tombstone via the public callback the SyncConnection
+        // would call on a `D` action.
+        await adapter.deleteModel("TestActivity", "a-deleted");
+        manager.recordInflightDelete("TestActivity", "a-deleted");
+        return {
+          lastSyncId: 1,
+          subscribedSyncGroups: [] as string[],
+          models: {
+            TestActivity: [
+              { id: "a-deleted", taskId: "t1", text: "would-resurrect" },
+              { id: "a-keep", taskId: "t1", text: "keep" },
+            ],
+          },
+        };
+      });
+      manager = new StoreManager({
+        workspaceId: crypto.randomUUID(),
+        bootstrapFetcher: bootstrap,
+        storageAdapter: adapter,
+      });
+      await manager.bootstrap();
+
+      const result =
+        await manager.getOrLoadAll<TestActivity>("TestActivity");
+
+      // The deleted record is not resurrected in the pool…
+      expect(result.find((a) => a.id === "a-deleted")).toBeUndefined();
+      expect(result.find((a) => a.id === "a-keep")?.text).toBe("keep");
+
+      // …or in IDB.
+      const stored = await adapter.readAllModels("TestActivity");
+      const ids = stored.map((r) => r.id);
+      expect(ids).not.toContain("a-deleted");
+      expect(ids).toContain("a-keep");
+    });
+
+    it("admits SSE inserts to the pool while the fetch is in flight (isModelFullyLoaded flips early)", async () => {
+      const adapter = new MemoryAdapter();
+      const bootstrap = vi.fn(async (_type, options) => {
+        if (!options?.onlyModels?.includes("TestActivity")) {
+          return {
+            lastSyncId: 0,
+            subscribedSyncGroups: [] as string[],
+            models: {} as Record<string, Record<string, unknown>[]>,
+          };
+        }
+        // Mid-flight: the gate the SSE pipeline reads must already say true.
+        expect(manager.isModelFullyLoaded("TestActivity")).toBe(true);
+        return {
+          lastSyncId: 1,
+          subscribedSyncGroups: [] as string[],
+          models: { TestActivity: [] },
+        };
+      });
+      manager = new StoreManager({
+        workspaceId: crypto.randomUUID(),
+        bootstrapFetcher: bootstrap,
+        storageAdapter: adapter,
+      });
+      await manager.bootstrap();
+
+      // Before the call, the gate is closed — Partial models don't admit
+      // inserts unless something says otherwise.
+      expect(manager.isModelFullyLoaded("TestActivity")).toBe(false);
+      await manager.getOrLoadAll<TestActivity>("TestActivity");
+      // After successful completion, the gate stays open via the persistent
+      // `*`-coverage entry, not via the pending refcount.
+      expect(manager.isModelFullyLoaded("TestActivity")).toBe(true);
+    });
+
+    it("dedupes concurrent calls for the same model+scope into one fetch", async () => {
+      const adapter = new MemoryAdapter();
+      const bootstrap = vi.fn(async (_type, options) => {
+        if (!options?.onlyModels?.includes("TestActivity")) {
+          return {
+            lastSyncId: 0,
+            subscribedSyncGroups: [] as string[],
+            models: {} as Record<string, Record<string, unknown>[]>,
+          };
+        }
+        return {
+          lastSyncId: 1,
+          subscribedSyncGroups: [] as string[],
+          models: {
+            TestActivity: [{ id: "a1", taskId: "t1", text: "x" }],
+          },
+        };
+      });
+      manager = new StoreManager({
+        workspaceId: crypto.randomUUID(),
+        bootstrapFetcher: bootstrap,
+        storageAdapter: adapter,
+      });
+      await manager.bootstrap();
+      bootstrap.mockClear();
+
+      const [a, b, c] = await Promise.all([
+        manager.getOrLoadAll<TestActivity>("TestActivity"),
+        manager.getOrLoadAll<TestActivity>("TestActivity"),
+        manager.getOrLoadAll<TestActivity>("TestActivity"),
+      ]);
+      expect(a.map((x) => x.id)).toEqual(["a1"]);
+      expect(b.map((x) => x.id)).toEqual(["a1"]);
+      expect(c.map((x) => x.id)).toEqual(["a1"]);
+      expect(bootstrap).toHaveBeenCalledTimes(1);
+    });
+
+    it("clears the pending refcount and tombstones after a failed fetch", async () => {
+      const adapter = new MemoryAdapter();
+      const fail = new Error("boom");
+      const bootstrap = vi.fn(async (_type, options) => {
+        if (!options?.onlyModels?.includes("TestActivity")) {
+          return {
+            lastSyncId: 0,
+            subscribedSyncGroups: [] as string[],
+            models: {} as Record<string, Record<string, unknown>[]>,
+          };
+        }
+        manager.recordInflightDelete("TestActivity", "a-mid");
+        throw fail;
+      });
+      manager = new StoreManager({
+        workspaceId: crypto.randomUUID(),
+        bootstrapFetcher: bootstrap,
+        storageAdapter: adapter,
+      });
+      await manager.bootstrap();
+
+      await expect(
+        manager.getOrLoadAll<TestActivity>("TestActivity"),
+      ).rejects.toThrow("boom");
+
+      // The gate must close again — coverage was never marked, and the
+      // pending refcount must have decremented in the finally block.
+      expect(manager.isModelFullyLoaded("TestActivity")).toBe(false);
+    });
   });
 });

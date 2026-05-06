@@ -581,6 +581,18 @@ const sm = new StoreManager({
 
 If your app has a single fixed scope per session, you can omit it.
 
+If the client knows the user's groups *before* the first bootstrap fetch (e.g. from your auth provider or a separate session API), pass a `bootstrapSyncGroups` hook. The returned set is append-only unioned with `dbMeta.subscribedSyncGroups` and used for every bootstrap-style fetch (Phase 1, deferred Phase 2, newly-added-models follow-up, `getOrLoadAll`), so the server doesn't have to infer scope from auth/session — useful for stateless servers and SSR. Hook failure aborts bootstrap.
+
+```ts
+const sm = new StoreManager({
+  // ...
+  bootstrapSyncGroups: async () => {
+    const { groups } = await fetch("/api/me/groups").then((r) => r.json());
+    return groups; // string[]
+  },
+});
+```
+
 ### Compound index-key fetches
 
 Two layers of compound parity, both opt-in:

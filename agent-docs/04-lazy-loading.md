@@ -32,7 +32,25 @@ export class DocumentContent extends BaseModel { ... }
 
 `Instant` models get a `FullStore`. All others get a `PartialStore`. The `FullStore` loads everything at bootstrap; the `PartialStore` starts empty and fills on demand.
 
-**`Instant` is the only strategy that ships in a full-bootstrap payload** — every full-bootstrap call (initial, deferred phase 2, sync-group activation, newly-added-models follow-up) sends `onlyModels` restricted to Instant. Lazy / Partial / ExplicitlyRequested models load via `getOrLoadCollection` / `getOrLoadById`; Local stays in IDB only; Ephemeral lives in the pool and is fed by SSE.
+**`Instant` is the only strategy that ships in the *initial* full-bootstrap payload** — the bootstrap pipeline restricts `onlyModels` to Instant. Lazy / Partial / ExplicitlyRequested models reach the client through one of three on-demand paths that all reuse the same `bootstrapFetcher`:
+
+- `getOrLoadCollection(modelName, indexKey, value)` — subset by FK/index.
+- `getOrLoadById` / `getOrLoadByIds` — single-id or batch by id.
+- `getOrLoadAll(modelName, { syncGroups? })` — *every* instance of the model (optionally scoped to a set of sync groups). Issues a `bootstrapFetcher(Full, { onlyModels: [name], syncGroups })` and records `*`-coverage in `partialIndexCoverage` so subsequent same-scope calls short-circuit.
+
+Local stays in IDB only; Ephemeral lives in the pool and is fed by SSE.
+
+### Concurrent SSE during a `getOrLoadAll` fetch
+
+The server's snapshot is taken at some syncId; SSE may deliver inserts, updates, or deletes for the same model before the response lands. To prevent the older snapshot from clobbering newer SSE-delivered state, `getOrLoadAll` flips `isModelFullyLoaded(modelName) → true` *before* it issues the fetch (via a refcounted "pending" flag that `shouldHydrateInsert` reads), so SSE inserts during the window land in the pool. The merge step then:
+
+- **drops snapshot records whose id was deleted in flight** — the SSE `D`/`A` handler tombstones the id via `recordInflightDelete`; the merge filters those out so a deleted record isn't resurrected.
+- **skips snapshot records the pool already holds** — SSE got there first with potentially newer data, and `hydrateAndPut` would overwrite via `existing.hydrate(data)`.
+- **writes IDB via `writeModelsIfAbsent`** — preserves any newer rows the SSE pipeline already wrote in step 2 of delta processing.
+
+`fetchDeferredModels` (Phase 2 of bootstrap) follows the same tombstone pattern so deletes during its window can't resurrect records either.
+
+Concurrent `getOrLoadAll` calls for the same `(modelName, scope)` are coalesced into a single in-flight promise. Different scopes for the same model run in parallel and share the tombstone set via the refcount.
 
 **The critical insight:** for `Partial` and `Lazy` models, records exist in IndexedDB but their hydrated instances don't exist in the ObjectPool or in the heap. They only enter the heap when explicitly loaded.
 

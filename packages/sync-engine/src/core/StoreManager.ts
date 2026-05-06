@@ -50,10 +50,7 @@ import {
   createBrowserSSEFactory,
 } from "./SyncConnection";
 import { ModelStream, type ModelStreamMessageTransform } from "./ModelStream";
-import {
-  BatchModelLoader,
-  type IndexBatchFetcher,
-} from "./BatchModelLoader";
+import { BatchModelLoader, type IndexBatchFetcher } from "./BatchModelLoader";
 import {
   COMPOUND_FETCH_THRESHOLD,
   wrapCompoundFetcher,
@@ -71,7 +68,6 @@ import {
   type EngineErrorContext,
   type EngineErrorHandler,
 } from "./types";
-
 
 /**
  * Thrown when a delete/archive is blocked by an onDelete: "restrict" relationship.
@@ -144,6 +140,22 @@ export interface StoreManagerConfig<TContext = unknown> {
   bootstrapFetcher: BootstrapFetcher;
   transactionSender?: TransactionSender;
   syncUrl?: string;
+
+  /**
+   * Optional async hook that returns the user's sync-group memberships
+   * before any bootstrap fetch runs. The returned groups are append-only
+   * unioned with `dbMeta.subscribedSyncGroups` (so a stale persisted set
+   * never shrinks the live one) and persisted, so every downstream
+   * `bootstrapFetcher` call — Phase 1, Phase 2 deferred, newly-added-models
+   * follow-up, and `getOrLoadAll` — can pass `syncGroups` from a single
+   * canonical source rather than relying on the server inferring scope
+   * from auth/session. Fires after the storage adapter connects but before
+   * the bootstrap type is determined, so the seeded groups can also
+   * influence Full vs Partial selection. Failure is fatal — bootstrap
+   * cannot safely proceed without scope. Return `[]` (or omit the hook)
+   * if the server is the source of truth for scope.
+   */
+  bootstrapSyncGroups?: () => Promise<string[]>;
 
   /** Secondary model update streams (e.g. a calculation service). */
   modelStreams?: ModelStreamConfig[];
@@ -407,6 +419,27 @@ export class StoreManager<TContext = unknown> {
    * `isModelFullyLoaded` is O(1) on the SSE insert hot path. Updated
    * wherever `partialIndexCoverage` mutates a `"*"` row. */
   private fullyLoadedModels = new Set<string>();
+  /** Models with an in-flight `getOrLoadAll` (or `fetchDeferredModels`)
+   * fetch. Refcounted because two fetches with different scopes can overlap.
+   * `isModelFullyLoaded` returns true while pending so `shouldHydrateInsert`
+   * starts admitting SSE deltas immediately — otherwise inserts arriving
+   * during the fetch window would land only in IDB and the snapshot's older
+   * `hydrateAndPut` pass would overwrite the pool with stale data. */
+  private pendingFullLoadRefcount = new Map<string, number>();
+  /** Tombstone set populated by SSE `D`/`A` handlers while a model has a
+   * pending full-load. The merge step at the end of `getOrLoadAll` /
+   * `fetchDeferredModels` filters snapshot records through this set so a
+   * delete that arrived after the server's snapshot doesn't get resurrected.
+   * Cleared when the last in-flight fetch for the model completes. */
+  private inflightDeletes = new Map<string, Set<string>>();
+  /** Per-(model, scope) in-flight `getOrLoadAll` promises so concurrent calls
+   * coalesce instead of double-fetching. Keyed by `coverageKey`. */
+  private inflightFullLoads = new Map<string, Promise<BaseModel[]>>();
+  /** Sync groups returned by `config.bootstrapSyncGroups`. Used as a
+   * pre-Phase-1 source for `subscribedSyncGroupsForFetch` (when no prior
+   * dbMeta exists, currentMeta is still null at fetch time) and unioned
+   * into the meta written by `saveMeta` after Phase 1/Partial completes. */
+  private seededSyncGroups: string[] = [];
   /** Wired only when `onDemandIndexBatchFetcher` is configured. */
   private indexBatchLoader: BatchModelLoader | null = null;
 
@@ -441,7 +474,8 @@ export class StoreManager<TContext = unknown> {
               this.objectPool,
               {
                 threshold:
-                  config.compoundIndexFetchThreshold ?? COMPOUND_FETCH_THRESHOLD,
+                  config.compoundIndexFetchThreshold ??
+                  COMPOUND_FETCH_THRESHOLD,
                 onCompoundFetched: (compound, bag) =>
                   this.absorbCompoundResponse(compound, bag),
               },
@@ -481,8 +515,13 @@ export class StoreManager<TContext = unknown> {
    * `value`, returning the result (or `value` unchanged when no rule applies).
    * Setters short-circuit on `hasFieldTransforms` first — by the time this
    * runs we know at least one rule exists somewhere in the engine. */
-  applyTransform(instance: BaseModel, propName: string, value: unknown): unknown {
-    const modelName = (instance.constructor as { _modelName?: string })._modelName;
+  applyTransform(
+    instance: BaseModel,
+    propName: string,
+    value: unknown,
+  ): unknown {
+    const modelName = (instance.constructor as { _modelName?: string })
+      ._modelName;
     if (modelName == null) {
       return value;
     }
@@ -495,7 +534,10 @@ export class StoreManager<TContext = unknown> {
     return transform(value, instance, this.context);
   }
 
-  private static fieldTransformKey(modelName: string, propName: string): string {
+  private static fieldTransformKey(
+    modelName: string,
+    propName: string,
+  ): string {
     return `${modelName}:${propName}`;
   }
 
@@ -555,6 +597,14 @@ export class StoreManager<TContext = unknown> {
       );
     }
     try {
+      // Kick off the sync-groups hook eagerly so its network RTT overlaps
+      // with `database.connect()` + `loadPartialIndexes()` below. The
+      // attached `.catch` only suppresses the unhandled-rejection event
+      // for the early-stop path; the real `await` further down still
+      // re-throws and propagates to the outer try/catch.
+      const seededP = this.config.bootstrapSyncGroups?.();
+      seededP?.catch(() => {});
+
       this.setPhase(BootstrapPhase.CreatingStores);
       for (const meta of ModelRegistry.allModels()) {
         let store: ModelStore;
@@ -599,6 +649,10 @@ export class StoreManager<TContext = unknown> {
         this.emitError(err, { kind: "deferredBootstrap", modelNames: [] });
       }
 
+      if (seededP != null) {
+        await this.applySeededSyncGroups(await seededP);
+      }
+
       this.setPhase(BootstrapPhase.DeterminingBootstrapType);
       const type = await this.database.determineBootstrapType();
       if (this.stopped) {
@@ -611,9 +665,7 @@ export class StoreManager<TContext = unknown> {
         await this.partialBootstrap();
         // Partial deltas can't fill newly-added models — fetch them in full.
         if (this.database.newlyAddedModels.length > 0) {
-          await this.fetchNewlyAddedModels(
-            this.database.newlyAddedModels,
-          );
+          await this.fetchNewlyAddedModels(this.database.newlyAddedModels);
         }
       } else {
         await this.localBootstrap();
@@ -645,6 +697,7 @@ export class StoreManager<TContext = unknown> {
             transform: this.config.syncTransform,
             reportError: sseErrorReporter,
             isModelFullyLoaded: this.isModelFullyLoaded.bind(this),
+            recordInflightDelete: this.recordInflightDelete.bind(this),
           },
         );
         this.syncConnection.connect();
@@ -702,13 +755,16 @@ export class StoreManager<TContext = unknown> {
 
     if (deferred.size > 0) {
       // Phase 1: critical Instant models only
-      const criticalModels = instantModels.filter((name) => !deferred.has(name));
+      const criticalModels = instantModels.filter(
+        (name) => !deferred.has(name),
+      );
       this.setPhase(
         BootstrapPhase.Fetching,
         `phase 1: ${criticalModels.length} critical models`,
       );
       const res = await this.config.bootstrapFetcher(BootstrapType.Full, {
         onlyModels: criticalModels,
+        syncGroups: this.subscribedSyncGroupsForFetch(),
         currentMeta: this.database.currentMeta,
       });
 
@@ -722,18 +778,7 @@ export class StoreManager<TContext = unknown> {
         }),
       );
       await this.applyDeletedIds(res);
-
-      this.setPhase(BootstrapPhase.Hydrating, `${this.objectPool.size} models`);
-      await this.database.saveMeta({
-        lastSyncId: res.lastSyncId,
-        subscribedSyncGroups: StoreManager.mergeSubscribedGroups(
-          this.database.currentMeta?.subscribedSyncGroups,
-          res.subscribedSyncGroups,
-        ),
-        schemaHash: ModelRegistry.schemaHash,
-        dbVersion: this.database.currentMeta?.dbVersion ?? 1,
-        backendDatabaseVersion: res.backendDatabaseVersion ?? 0,
-      });
+      await this.persistFullBootstrapMeta(res);
 
       // Phase 2: deferred models — runs AFTER bootstrap() returns and the
       // engine is marked ready. The UI is already interactive at this point.
@@ -748,6 +793,7 @@ export class StoreManager<TContext = unknown> {
       this.setPhase(BootstrapPhase.Fetching, "full");
       const res = await this.config.bootstrapFetcher(BootstrapType.Full, {
         onlyModels: instantModels,
+        syncGroups: this.subscribedSyncGroupsForFetch(),
         currentMeta: this.database.currentMeta,
       });
 
@@ -761,18 +807,7 @@ export class StoreManager<TContext = unknown> {
         }),
       );
       await this.applyDeletedIds(res);
-
-      this.setPhase(BootstrapPhase.Hydrating, `${this.objectPool.size} models`);
-      await this.database.saveMeta({
-        lastSyncId: res.lastSyncId,
-        subscribedSyncGroups: StoreManager.mergeSubscribedGroups(
-          this.database.currentMeta?.subscribedSyncGroups,
-          res.subscribedSyncGroups,
-        ),
-        schemaHash: ModelRegistry.schemaHash,
-        dbVersion: this.database.currentMeta?.dbVersion ?? 1,
-        backendDatabaseVersion: res.backendDatabaseVersion ?? 0,
-      });
+      await this.persistFullBootstrapMeta(res);
     }
   }
 
@@ -784,19 +819,25 @@ export class StoreManager<TContext = unknown> {
    * which connects before this method runs.
    *
    * Bypasses clearModelStore to avoid clobbering concurrent SSE writes to IDB.
-   * Uses writeModelsIfAbsent so snapshot records only land if SSE hasn't already
-   * written a newer version.
+   * Uses writeModelsIfAbsent + tombstone filter to merge with SSE — see
+   * `agent-docs/04-lazy-loading.md` for the in-flight merge invariants.
    */
   private async fetchDeferredModels(modelNames: string[]) {
+    for (const name of modelNames) {
+      this.beginPendingFullLoad(name);
+    }
     try {
-      const currentMeta = this.database.currentMeta;
       const res = await this.config.bootstrapFetcher(BootstrapType.Full, {
         onlyModels: modelNames,
-        sinceSyncId: currentMeta?.lastSyncId,
+        syncGroups: this.subscribedSyncGroupsForFetch(),
+        currentMeta: this.database.currentMeta,
       });
       await Promise.all(
         Object.entries(res.models).map(async ([name, records]) => {
-          await this.database.writeModelsIfAbsent(name, records);
+          const live = this.filterTombstoned(name, records);
+          if (live.length > 0) {
+            await this.database.writeModelsIfAbsent(name, live);
+          }
         }),
       );
       await this.applyDeletedIds(res);
@@ -809,7 +850,54 @@ export class StoreManager<TContext = unknown> {
       // Deferred fetch failure is non-fatal — models load on demand later.
       // Surface to onError so adopters can monitor.
       this.emitError(err, { kind: "deferredBootstrap", modelNames });
+    } finally {
+      for (const name of modelNames) {
+        this.endPendingFullLoad(name);
+      }
     }
+  }
+
+  /** Fold the result of `bootstrapSyncGroups` into `dbMeta`. When prior
+   * meta exists we persist immediately so `localBootstrap` (no `saveMeta`
+   * of its own) and a subsequent reload see the seeded groups; `saveMeta`
+   * is safe here because `lastSyncId` is preserved. With no prior meta,
+   * stash on the instance — calling `saveMeta` with `lastSyncId: 0` would
+   * coerce a fresh bootstrap into the `Local` path. Phase 1's `saveMeta`
+   * will fold the stashed set in. */
+  private async applySeededSyncGroups(seeded: string[]): Promise<void> {
+    if (seeded.length === 0) {
+      return;
+    }
+    const meta = this.database.currentMeta;
+    if (meta == null) {
+      this.seededSyncGroups = seeded;
+      return;
+    }
+    meta.subscribedSyncGroups = StoreManager.mergeSubscribedGroups(
+      meta.subscribedSyncGroups,
+      seeded,
+    );
+    await this.database.saveMeta(meta);
+  }
+
+  /** Persist `dbMeta` after a Full bootstrap response, folding in any
+   * `seededSyncGroups` left over from `bootstrapSyncGroups`. Shared by the
+   * Phase-1 and single-phase branches of `fullBootstrap`. */
+  private async persistFullBootstrapMeta(
+    res: BootstrapResponse,
+  ): Promise<void> {
+    this.setPhase(BootstrapPhase.Hydrating, `${this.objectPool.size} models`);
+    await this.database.saveMeta({
+      lastSyncId: res.lastSyncId,
+      subscribedSyncGroups: StoreManager.mergeSubscribedGroups(
+        this.database.currentMeta?.subscribedSyncGroups,
+        [...res.subscribedSyncGroups, ...this.seededSyncGroups],
+      ),
+      schemaHash: ModelRegistry.schemaHash,
+      dbVersion: this.database.currentMeta?.dbVersion ?? 1,
+      backendDatabaseVersion: res.backendDatabaseVersion ?? 0,
+    });
+    this.seededSyncGroups = [];
   }
 
   /** Append-only merge: bootstrap responses never shrink the subscription set. */
@@ -818,6 +906,18 @@ export class StoreManager<TContext = unknown> {
     fromResponse: string[],
   ): string[] {
     return [...new Set([...(existing ?? []), ...fromResponse])];
+  }
+
+  /** Canonical scope for bootstrap-style fetches: persisted set, then the
+   * pre-Phase-1 seeded fallback, else `undefined`. */
+  private subscribedSyncGroupsForFetch(): string[] | undefined {
+    const fromMeta = this.database.currentMeta?.subscribedSyncGroups;
+    if (fromMeta != null && fromMeta.length > 0) {
+      return fromMeta;
+    }
+    return this.seededSyncGroups.length > 0
+      ? this.seededSyncGroups
+      : undefined;
   }
 
   /**
@@ -866,6 +966,7 @@ export class StoreManager<TContext = unknown> {
     );
     const res = await this.config.bootstrapFetcher(BootstrapType.Partial, {
       sinceSyncId: existing.lastSyncId,
+      syncGroups: this.subscribedSyncGroupsForFetch(),
       currentMeta: existing,
     });
 
@@ -1256,6 +1357,7 @@ export class StoreManager<TContext = unknown> {
     try {
       res = await this.config.bootstrapFetcher(BootstrapType.Full, {
         onlyModels: targets,
+        syncGroups: this.subscribedSyncGroupsForFetch(),
         currentMeta: this.database.currentMeta,
       });
     } catch (err) {
@@ -1546,7 +1648,8 @@ export class StoreManager<TContext = unknown> {
     opts?: { actionType?: string; metadata?: Record<string, unknown> },
   ): Promise<T> {
     const result = await fn();
-    const changeLogId = typeof result === "string" ? result : result.changeLogId;
+    const changeLogId =
+      typeof result === "string" ? result : result.changeLogId;
     const action: UndoableAction = {
       id: crypto.randomUUID(),
       changeLogId,
@@ -1597,10 +1700,11 @@ export class StoreManager<TContext = unknown> {
 
     // Single resolved fetcher — either the batched loader or the per-triple
     // callback. Routing both through one local lets TS narrow the null check.
-    const fetchFromServer = this.indexBatchLoader != null
-      ? (m: string, k: string, v: string) =>
-          this.indexBatchLoader!.load({ modelName: m, indexKey: k, value: v })
-      : this.config.onDemandFetcher;
+    const fetchFromServer =
+      this.indexBatchLoader != null
+        ? (m: string, k: string, v: string) =>
+            this.indexBatchLoader!.load({ modelName: m, indexKey: k, value: v })
+        : this.config.onDemandFetcher;
 
     if (
       meta?.loadStrategy !== LoadStrategy.Instant &&
@@ -1687,13 +1791,65 @@ export class StoreManager<TContext = unknown> {
     );
   }
 
-  /** True when `getOrLoadAll(modelName, ...)` has been called for any scope
-   * — i.e., the adopter expressed "we want every instance of this model."
-   * SSE inserts honor this so observers reading via `useModels(modelName)`
-   * see live additions instead of having to re-call `getOrLoadAll`. O(1) —
-   * mirrors `partialIndexCoverage`'s `"*"` rows in `fullyLoadedModels`. */
+  /** True when the model has `*`-coverage (a completed `getOrLoadAll`) or
+   * a full-load fetch is currently in flight. Read on the SSE insert hot
+   * path via `shouldHydrateInsert` — the in-flight branch is what makes
+   * deltas land in the pool during the fetch window. */
   isModelFullyLoaded(modelName: string): boolean {
-    return this.fullyLoadedModels.has(modelName);
+    return (
+      this.fullyLoadedModels.has(modelName) ||
+      this.pendingFullLoadRefcount.has(modelName)
+    );
+  }
+
+  /** Called by SSE D/A processing whenever a delete arrives. While a model
+   * has a pending full-load, the id is recorded so the in-flight fetch's
+   * merge step can drop a stale-snapshot resurrection. No-op when no fetch
+   * is pending — keeps the hot path cheap. */
+  recordInflightDelete(modelName: string, id: string): void {
+    if (!this.pendingFullLoadRefcount.has(modelName)) {
+      return;
+    }
+    let set = this.inflightDeletes.get(modelName);
+    if (set == null) {
+      set = new Set();
+      this.inflightDeletes.set(modelName, set);
+    }
+    set.add(id);
+  }
+
+  /** Increment the in-flight refcount for `modelName`. Must be paired with
+   * `endPendingFullLoad`. While refcount > 0, `isModelFullyLoaded` returns
+   * true (admitting SSE inserts to the pool) and `recordInflightDelete`
+   * tracks tombstones. */
+  private beginPendingFullLoad(modelName: string): void {
+    const prev = this.pendingFullLoadRefcount.get(modelName) ?? 0;
+    this.pendingFullLoadRefcount.set(modelName, prev + 1);
+  }
+
+  /** Decrement the in-flight refcount. When it hits 0, drop the tombstone
+   * set — any snapshot that needed it has already merged. */
+  private endPendingFullLoad(modelName: string): void {
+    const prev = this.pendingFullLoadRefcount.get(modelName) ?? 0;
+    if (prev <= 1) {
+      this.pendingFullLoadRefcount.delete(modelName);
+      this.inflightDeletes.delete(modelName);
+    } else {
+      this.pendingFullLoadRefcount.set(modelName, prev - 1);
+    }
+  }
+
+  /** Strip records whose id was tombstoned by an SSE delete during the
+   * in-flight full-load window. Common case (no pending deletes) returns
+   * the input unchanged so the caller doesn't allocate. */
+  private filterTombstoned(
+    modelName: string,
+    records: Record<string, unknown>[],
+  ): Record<string, unknown>[] {
+    const t = this.inflightDeletes.get(modelName);
+    return t != null && t.size > 0
+      ? records.filter((r) => !t.has(r.id as string))
+      : records;
   }
 
   /**
@@ -2048,6 +2204,11 @@ export class StoreManager<TContext = unknown> {
    * Coverage is tracked in `partialIndexCoverage` under the
    * `ALL_INDEX_KEY_SENTINEL` reserved indexKey — adopters never see it but it
    * coexists with real indexKeys, so callers must avoid using "*" themselves.
+   *
+   * Concurrent SSE deltas during the fetch are merged via a pending-flag +
+   * tombstone scheme — see `agent-docs/04-lazy-loading.md` for the full
+   * invariants. Concurrent calls with the same `(modelName, scope)` coalesce
+   * into one fetch via `inflightFullLoads`.
    */
   async getOrLoadAll<T extends BaseModel = BaseModel>(
     modelName: string,
@@ -2086,27 +2247,79 @@ export class StoreManager<TContext = unknown> {
       return this.objectPool.getAll<T>(modelName);
     }
 
-    if (!alreadyCovered) {
+    const inflight = this.inflightFullLoads.get(coverageKey);
+    if (inflight != null) {
+      return inflight as Promise<T[]>;
+    }
+
+    const work = alreadyCovered
+      ? this.hydrateFullLoadFromIDB(modelName, meta)
+      : this.fetchAndMergeFullLoad(modelName, scope);
+    this.inflightFullLoads.set(coverageKey, work);
+    try {
+      return (await work) as T[];
+    } finally {
+      this.inflightFullLoads.delete(coverageKey);
+    }
+  }
+
+  /** Hydrate every IDB row for a covered (or Local) model into the pool.
+   * Used the first time `getOrLoadAll` runs this session against a model
+   * whose `*`-coverage was already recorded (e.g. on a warm reload). */
+  private async hydrateFullLoadFromIDB(
+    modelName: string,
+    meta: ModelMeta,
+  ): Promise<BaseModel[]> {
+    const idbRecords = await this.database.readAllModels(modelName);
+    for (const record of idbRecords) {
+      this.objectPool.hydrateAndPut(modelName, meta, record);
+    }
+    this.poolSyncedFromIDB.add(modelName);
+    return this.objectPool.getAll(modelName);
+  }
+
+  /** Fetch the snapshot and merge it with whatever the SSE pipeline wrote
+   * during the in-flight window. See the JSDoc on `getOrLoadAll` for the
+   * merge invariants (skip pool-present, drop tombstoned, IDB if-absent). */
+  private async fetchAndMergeFullLoad(
+    modelName: string,
+    scope: string[],
+  ): Promise<BaseModel[]> {
+    const meta = ModelRegistry.getModelMeta(modelName);
+    if (meta == null) {
+      return [];
+    }
+    const coverageValue = encodeCsvList(scope);
+    this.beginPendingFullLoad(modelName);
+    try {
       let res: BootstrapResponse;
       try {
         res = await this.config.bootstrapFetcher(BootstrapType.Full, {
           onlyModels: [modelName],
-          syncGroups: scope.length > 0 ? scope : undefined,
+          syncGroups:
+            scope.length > 0 ? scope : this.subscribedSyncGroupsForFetch(),
           currentMeta: this.database.currentMeta,
         });
       } catch (err) {
         this.emitError(err, { kind: "syncGroupFetch", groups: scope });
         throw err;
       }
-      const records = res.models[modelName] ?? [];
-      if (records.length > 0) {
-        await this.database.writeModels(modelName, records);
-        // `hydrateAndPut` is idempotent — re-hydrates already-pooled
-        // instances in place — so no membership guard is needed.
-        for (const record of records) {
+
+      const live = this.filterTombstoned(
+        modelName,
+        res.models[modelName] ?? [],
+      );
+      if (live.length > 0) {
+        await this.database.writeModelsIfAbsent(modelName, live);
+        for (const record of live) {
+          const id = record.id as string | undefined;
+          if (id != null && this.objectPool.getById(modelName, id) != null) {
+            continue;
+          }
           this.objectPool.hydrateAndPut(modelName, meta, record);
         }
       }
+
       this.database.markModelLoaded(modelName);
       await this.markPartialIndexLoaded(
         modelName,
@@ -2114,18 +2327,10 @@ export class StoreManager<TContext = unknown> {
         coverageValue,
       );
       this.poolSyncedFromIDB.add(modelName);
-      return this.objectPool.getAll<T>(modelName);
+      return this.objectPool.getAll(modelName);
+    } finally {
+      this.endPendingFullLoad(modelName);
     }
-
-    // First call this session for a covered (or Local) model: hydrate from
-    // IDB so the pool is in sync, then mark synced so the fast path above
-    // catches subsequent calls.
-    const idbRecords = await this.database.readAllModels(modelName);
-    for (const record of idbRecords) {
-      this.objectPool.hydrateAndPut(modelName, meta, record);
-    }
-    this.poolSyncedFromIDB.add(modelName);
-    return this.objectPool.getAll<T>(modelName);
   }
 
   // ── Test / Storybook seeding ─────────────────────────────────────────────
@@ -2347,6 +2552,10 @@ export class StoreManager<TContext = unknown> {
   private resetPoolState(): void {
     this.objectPool.clear();
     this.poolSyncedFromIDB.clear();
+    this.pendingFullLoadRefcount.clear();
+    this.inflightDeletes.clear();
+    this.inflightFullLoads.clear();
+    this.seededSyncGroups = [];
   }
 
   async teardown() {
@@ -2372,6 +2581,10 @@ export class StoreManager<TContext = unknown> {
     this.stores.clear();
     this.partialIndexCoverage.clear();
     this.fullyLoadedModels.clear();
+    this.pendingFullLoadRefcount.clear();
+    this.inflightDeletes.clear();
+    this.inflightFullLoads.clear();
+    this.seededSyncGroups = [];
     this.loadedIds.clear();
     this.poolSyncedFromIDB.clear();
     this.fieldTransforms.clear();

@@ -38,6 +38,20 @@ interface BootstrapResponse {
 
 The server is authoritative. It decides what groups the client should be in based on the user's permissions. The client stores this list and uses it as the SSE subscription parameter.
 
+### Pre-bootstrap seeding via `bootstrapSyncGroups`
+
+If the client already knows the user's groups before the first fetch (auth provider, session API), pass `bootstrapSyncGroups: () => Promise<string[]>` in `StoreManagerConfig`. It fires after `ConnectingDatabase` but before `DeterminingBootstrapType`. The returned set is append-only unioned with `dbMeta.subscribedSyncGroups` (so a stale persisted set never shrinks the live one) and surfaces as the `syncGroups` parameter on every bootstrap-style fetch:
+
+- Phase 1 / single-phase `fullBootstrap`
+- Phase 2 `fetchDeferredModels`
+- `fetchNewlyAddedModels` (registry-grew-after-last-connect path)
+- `partialBootstrap`
+- `getOrLoadAll(name, { syncGroups: ... })` — explicit scope still wins; falls back to the canonical set when the caller passes none
+
+This makes the client self-describing: the server doesn't have to infer scope from auth/session and can be stateless. Hook failure is fatal — bootstrap cannot safely proceed without scope. Return `[]` (or omit the hook) if the server is the source of truth.
+
+The hook does **not** call `saveMeta` directly — that would coerce a fresh bootstrap into the `Local` path by giving the adapter a meta with `lastSyncId: 0`. Instead, the seeded set is held in memory and folded into the `subscribedSyncGroups` written by Phase 1's existing `saveMeta`.
+
 ## How the SSE Connection Uses Them
 
 The `SyncConnection` builds the EventSource URL with the current sync groups:

@@ -105,6 +105,11 @@ export interface SyncConnectionOptions {
   transform?: SyncMessageTransform;
   reportError?: SSEErrorReporter;
   isModelFullyLoaded?: (modelName: string) => boolean;
+  /** Notified for every D/A action so StoreManager can tombstone deletes
+   * that arrive while a `getOrLoadAll` / `fetchDeferredModels` snapshot
+   * fetch is in flight. The implementation is expected to be a cheap no-op
+   * when no fetch is pending. */
+  recordInflightDelete?: (modelName: string, id: string) => void;
 }
 
 export class SyncConnection extends BaseSSEConnection {
@@ -129,6 +134,7 @@ export class SyncConnection extends BaseSSEConnection {
    * always land in the pool — bypassing the per-FK `isCollectionLoaded`
    * gate, which doesn't see `getOrLoadAll`'s sentinel coverage. */
   private isModelFullyLoaded?: (modelName: string) => boolean;
+  private recordInflightDelete?: (modelName: string, id: string) => void;
 
   constructor(
     url: string,
@@ -143,6 +149,7 @@ export class SyncConnection extends BaseSSEConnection {
     this.isCollectionLoaded = opts.isCollectionLoaded;
     this.transform = opts.transform;
     this.isModelFullyLoaded = opts.isModelFullyLoaded;
+    this.recordInflightDelete = opts.recordInflightDelete;
   }
 
   protected buildUrl(): string {
@@ -367,6 +374,10 @@ export class SyncConnection extends BaseSSEConnection {
 
       case "D":
       case "A": {
+        // Tombstone the id so any in-flight `getOrLoadAll` /
+        // `fetchDeferredModels` snapshot fetch drops a stale resurrection
+        // when its older snapshot still includes the now-deleted record.
+        this.recordInflightDelete?.(action.modelName, action.modelId);
         // Cascade delete: remove BackReference-owned models
         this.cascadeDelete(action.modelName, action.modelId);
         // Pool.remove detaches the model from any parent RefCollections / BackRefs
@@ -487,5 +498,4 @@ export class SyncConnection extends BaseSSEConnection {
       }
     }
   }
-
 }

@@ -98,7 +98,7 @@ afterEach(async () => {
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 describe("deferred models — phase 2 fetch", () => {
-  it("calls bootstrapFetcher with Full type and sinceSyncId for the deferred fetch", async () => {
+  it("calls bootstrapFetcher with Full type for the deferred fetch", async () => {
     const { manager: m, bootstrapFetcher } = await makeManager(
       { lastSyncId: 10, subscribedSyncGroups: [], models: {} },
       {
@@ -113,10 +113,11 @@ describe("deferred models — phase 2 fetch", () => {
 
     const [type, options] = bootstrapFetcher.mock.calls[1];
     expect(type).toBe(BootstrapType.Full);
-    expect(options).toMatchObject({
-      onlyModels: ["TestNote"],
-      sinceSyncId: 10,
-    });
+    expect(options).toMatchObject({ onlyModels: ["TestNote"] });
+    // No `sinceSyncId` for Full snapshots — that flag is only meaningful for
+    // BootstrapType.Partial. The in-flight merge (writeModelsIfAbsent +
+    // delete tombstones) handles SSE deltas during the window.
+    expect(options?.sinceSyncId).toBeUndefined();
   });
 
   it("upserts snapshot records into IDB without wiping existing records first", async () => {

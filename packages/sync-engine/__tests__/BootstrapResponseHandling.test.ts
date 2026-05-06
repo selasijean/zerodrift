@@ -272,6 +272,115 @@ describe("subscribedSyncGroups — fullBootstrap (re-bootstrap via schema mismat
   });
 });
 
+// ── bootstrapSyncGroups hook ─────────────────────────────────────────────────
+
+describe("bootstrapSyncGroups — config hook", () => {
+  it("seeds dbMeta and passes the union as syncGroups to Phase 1", async () => {
+    const adapter = new MemoryAdapter();
+    const bootstrapFetcher = vi.fn().mockResolvedValue({
+      lastSyncId: 5,
+      subscribedSyncGroups: [],
+      models: {},
+    });
+
+    manager = new StoreManager({
+      workspaceId: crypto.randomUUID(),
+      bootstrapFetcher,
+      bootstrapSyncGroups: async () => ["team-a", "team-b"],
+      storageAdapter: adapter,
+    });
+
+    await manager.bootstrap();
+
+    const [type, opts] = bootstrapFetcher.mock.calls[0];
+    expect(type).toBe(BootstrapType.Full);
+    expect(opts.syncGroups?.sort()).toEqual(["team-a", "team-b"]);
+
+    const meta = await manager.database.loadMeta();
+    expect(meta!.subscribedSyncGroups.sort()).toEqual(["team-a", "team-b"]);
+  });
+
+  it("appends to existing dbMeta.subscribedSyncGroups (never shrinks)", async () => {
+    const adapter = new MemoryAdapter();
+    const bootstrapFetcher = vi.fn().mockResolvedValue({
+      lastSyncId: 100,
+      subscribedSyncGroups: [],
+      models: {},
+    });
+
+    manager = new StoreManager({
+      workspaceId: crypto.randomUUID(),
+      bootstrapFetcher,
+      // Hook returns a subset of what's persisted.
+      bootstrapSyncGroups: async () => ["team-a"],
+      storageAdapter: adapter,
+    });
+
+    await manager.database.connect();
+    await manager.database.saveMeta({
+      lastSyncId: 50,
+      subscribedSyncGroups: ["team-b", "team-c"],
+      schemaHash: "test",
+      dbVersion: 1,
+      backendDatabaseVersion: 0,
+    });
+
+    await manager.bootstrap();
+
+    const opts = bootstrapFetcher.mock.calls[0][1];
+    expect(opts.syncGroups?.sort()).toEqual(["team-a", "team-b", "team-c"]);
+
+    const meta = await manager.database.loadMeta();
+    expect(meta!.subscribedSyncGroups.sort()).toEqual([
+      "team-a",
+      "team-b",
+      "team-c",
+    ]);
+  });
+
+  it("does not pass syncGroups when hook returns empty and no persisted set", async () => {
+    const adapter = new MemoryAdapter();
+    const bootstrapFetcher = vi.fn().mockResolvedValue({
+      lastSyncId: 0,
+      subscribedSyncGroups: [],
+      models: {},
+    });
+
+    manager = new StoreManager({
+      workspaceId: crypto.randomUUID(),
+      bootstrapFetcher,
+      bootstrapSyncGroups: async () => [],
+      storageAdapter: adapter,
+    });
+
+    await manager.bootstrap();
+
+    const opts = bootstrapFetcher.mock.calls[0][1];
+    expect(opts.syncGroups).toBeUndefined();
+  });
+
+  it("hook failure aborts bootstrap (fatal)", async () => {
+    const adapter = new MemoryAdapter();
+    const bootstrapFetcher = vi.fn().mockResolvedValue({
+      lastSyncId: 0,
+      subscribedSyncGroups: [],
+      models: {},
+    });
+
+    manager = new StoreManager({
+      workspaceId: crypto.randomUUID(),
+      bootstrapFetcher,
+      bootstrapSyncGroups: async () => {
+        throw new Error("auth lookup failed");
+      },
+      storageAdapter: adapter,
+    });
+
+    await expect(manager.bootstrap()).rejects.toThrow("auth lookup failed");
+    expect(bootstrapFetcher).not.toHaveBeenCalled();
+  });
+});
+
 describe("subscribedSyncGroups — partialBootstrap", () => {
   it("ignores response.subscribedSyncGroups; client is source of truth", async () => {
     const adapter = new MemoryAdapter();
