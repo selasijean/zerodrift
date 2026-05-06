@@ -230,6 +230,15 @@ export interface StoreApi {
    */
   batch(fn: () => Promise<void>): Promise<string>;
   batch(fn: () => void): string;
+  /**
+   * Stage optimistic edits with all-or-nothing local commit semantics.
+   * Every model touched inside `fn` is `save()`d on success (in one batch
+   * → one undo entry) or `discardUnsavedChanges()`d on throw. See
+   * `StoreManager.atomic` for the full contract (SSE rebasing during
+   * await, runUndoable side effects, no nesting).
+   */
+  atomic<T>(fn: () => Promise<T>): Promise<T>;
+  atomic<T>(fn: () => T): T;
   /** Pop and revert the top of the undo stack. */
   undo(): Promise<UndoResult | null>;
   /** Re-apply the top of the redo stack. */
@@ -291,6 +300,7 @@ export function createStore<
 
   const store: Record<string, unknown> = {
     batch: sm.batch.bind(sm) as StoreApi["batch"],
+    atomic: sm.atomic.bind(sm) as StoreApi["atomic"],
     undo: () => sm.undo(),
     redo: () => sm.redo(),
     get undoDepth() {

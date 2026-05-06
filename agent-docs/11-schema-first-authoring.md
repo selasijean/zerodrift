@@ -135,7 +135,7 @@ The compiler enforces these invariants and rejects the schema otherwise:
 - Each `s.refId(...)` field is referenced by at most one link.
 - `from.as` and `to.many` don't collide with declared field names.
 - Two entities don't compile to the same registry name.
-- Schema entity keys don't collide with reserved `store.*` top-level methods (`batch`, `undo`, `redo`, `undoDepth`, `redoDepth`, `runUndoable`).
+- Schema entity keys don't collide with reserved `store.*` top-level methods (`batch`, `atomic`, `undo`, `redo`, `undoDepth`, `redoDepth`, `runUndoable`).
 
 ## The typed `store` surface
 
@@ -212,6 +212,15 @@ Inside React, prefer the hooks ([typed React hooks](#typed-react-hooks) below). 
 ```typescript
 store.batch(fn): string                    // sync — fn() runs in one batchId
 store.batch(async fn): Promise<string>     // async — finally-fires endBatch even on throw
+
+// Stage optimistic edits with all-or-nothing local commit semantics.
+// On resolve, every touched model's save() runs in one batch (one undo entry).
+// On throw, every touched model's discardUnsavedChanges() runs and the error rethrows.
+await store.atomic(async () => {
+  book.optimisticUpdate({ title: "X" });
+  issue.optimisticUpdate({ status: "done" });
+  await api.call(); // throws → both edits roll back
+});
 
 await store.undo();                        // returns UndoResult | null
 await store.redo();

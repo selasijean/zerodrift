@@ -318,6 +318,57 @@ describe("createStore — batch", () => {
 });
 
 // ---------------------------------------------------------------------------
+// atomic
+// ---------------------------------------------------------------------------
+
+describe("createStore — atomic", () => {
+  it("returns the sync callback's value", () => {
+    const out = db.atomic(() => 42);
+    expect(out).toBe(42);
+  });
+
+  it("returns the async callback's value and commits staged edits", async () => {
+    db.dbTeam.create({ id: "team-atom-1", name: "Old" });
+    // The schema-first record type doesn't expose BaseModel methods like
+    // `optimisticUpdate` — reach into the pool for the staged-edit path.
+    const team = sm.objectPool.getById("DbTeam", "team-atom-1")!;
+
+    const out = await db.atomic(async () => {
+      team.optimisticUpdate({ name: "New" });
+      await Promise.resolve();
+      return "done";
+    });
+
+    expect(out).toBe("done");
+    expect(db.dbTeam.peek("team-atom-1")?.name).toBe("New");
+  });
+
+  it("rolls back staged optimisticUpdate when the fn throws", () => {
+    db.dbTeam.create({ id: "team-atom-2", name: "Original" });
+    const team = sm.objectPool.getById("DbTeam", "team-atom-2")!;
+
+    expect(() =>
+      db.atomic(() => {
+        team.optimisticUpdate({ name: "Staged" });
+        throw new Error("boom");
+      }),
+    ).toThrow(/boom/);
+
+    expect(db.dbTeam.peek("team-atom-2")?.name).toBe("Original");
+  });
+
+  it("rejects nested atomic — proves delegation to StoreManager.atomic", () => {
+    expect(() =>
+      db.atomic(() => {
+        db.atomic(() => {
+          /* never runs */
+        });
+      }),
+    ).toThrow(/Nested atomic/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // peekAll
 // ---------------------------------------------------------------------------
 
