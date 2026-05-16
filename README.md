@@ -33,9 +33,10 @@ If you use decorators, import `reflect-metadata` once before model classes are l
 
 | Import | Use it for |
 |---|---|
-| `sync-engine` | `StoreManager`, `BaseModel`, decorators, `ObjectPool`, storage adapters, and core types. |
+| `sync-engine` | `StoreManager`, `BaseModel`, decorators, `MemoryAdapter`, relation field types (`RefCollection`/`BackRef`/`OwnedRefs`), and the config / error / sync types. The curated, stable surface. |
 | `sync-engine/schema` | `defineSchema`, `entityFromZod`, field builders, links, extensions, and typed `store.<entity>.*` APIs. |
 | `sync-engine/react` | `<SyncProvider>` and React hooks: `useRecord`, `useRecords`, `useRecordsByIndex`, `useRelation`, `useBatch`, `useUndoRedo`. |
+| `sync-engine/internal` | Engine machinery (`ObjectPool`, `TransactionQueue`, `SyncConnection`, `ModelRegistry`, …) for tooling/tests. **No stability promise** — may change between releases. |
 
 ## Define your models
 
