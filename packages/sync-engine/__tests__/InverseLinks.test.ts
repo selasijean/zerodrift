@@ -26,7 +26,7 @@ afterEach(async () => {
 /**
  * These tests exercise the architecturally-correct path: parent RefCollections
  * track children automatically as the pool changes. No invalidate-then-reload
- * cycle, no useModels-and-filter dance — just `parent.children.items` being
+ * cycle, no useRecords-and-filter dance — just `parent.children.items` being
  * live at all times.
  */
 describe("ObjectPool ↔ RefCollection inverse links", () => {

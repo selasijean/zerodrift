@@ -14,14 +14,14 @@ import { StoreManager } from "@sync-engine/StoreManager";
 const dbSchema = defineSchema({
   entities: {
     dbTeam: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id: s.id(),
         name: s.string(),
       },
     }),
     dbIssue: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id: s.id(),
         title: s.string().default(""),
@@ -69,8 +69,10 @@ afterEach(async () => {
 describe("createStore — shape", () => {
   it("exposes one namespace per entity key", () => {
     expect(typeof db.dbTeam.peek).toBe("function");
+    expect(typeof db.dbTeam.has).toBe("function");
     expect(typeof db.dbTeam.create).toBe("function");
-    expect(typeof db.dbTeam.update).toBe("function");
+    expect(typeof db.dbTeam.patch).toBe("function");
+    expect(typeof db.dbTeam.draft).toBe("function");
     expect(typeof db.dbTeam.delete).toBe("function");
 
     expect(typeof db.dbIssue.peek).toBe("function");
@@ -82,13 +84,20 @@ describe("createStore — shape", () => {
 // ---------------------------------------------------------------------------
 
 describe("createStore — peek", () => {
-  it("returns null when no record is in the pool", () => {
-    expect(db.dbTeam.peek("missing")).toBeNull();
+  it("returns undefined when no record is in the pool", () => {
+    expect(db.dbTeam.peek("missing")).toBeUndefined();
   });
 
   it("returns the pooled record after create", () => {
     const team = db.dbTeam.create({ id: "team-1", name: "Engineering" });
     expect(db.dbTeam.peek("team-1")).toBe(team);
+  });
+
+  it("has() reports pool membership without returning the record", () => {
+    expect(db.dbTeam.has("team-has")).toBe(false);
+    db.dbTeam.create({ id: "team-has", name: "Present" });
+    expect(db.dbTeam.has("team-has")).toBe(true);
+    expect(db.dbTeam.has("missing")).toBe(false);
   });
 });
 
@@ -130,23 +139,104 @@ describe("createStore — create", () => {
 });
 
 // ---------------------------------------------------------------------------
-// update
+// patch
 // ---------------------------------------------------------------------------
 
-describe("createStore — update", () => {
-  it("applies a partial update and enqueues a transaction", () => {
+describe("createStore — patch", () => {
+  it("applies a partial update, enqueues a transaction, and returns the record", () => {
     const team = db.dbTeam.create({ id: "team-up", name: "Old" });
     const before = sm.transactionQueue.pendingCount;
 
-    db.dbTeam.update("team-up", { name: "New" });
+    const returned = db.dbTeam.patch("team-up", { name: "New" });
 
     expect(team.name).toBe("New");
+    expect(returned).toBe(team);
     expect(sm.transactionQueue.pendingCount).toBe(before + 1);
   });
 
   it("throws when the record is not in the pool", () => {
-    expect(() => db.dbTeam.update("ghost", { name: "x" })).toThrow(
+    expect(() => db.dbTeam.patch("ghost", { name: "x" })).toThrow(
       /no record with id "ghost"/,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// draft
+// ---------------------------------------------------------------------------
+
+describe("createStore — draft", () => {
+  it("draft(input) stages a new record: no pool entry, no transaction until save()", () => {
+    const d = db.dbTeam.draft({ id: "team-draft-1", name: "Staged" });
+    expect(d.id).toBe("team-draft-1");
+    expect(sm.objectPool.getById("DbTeam", "team-draft-1")).toBeUndefined();
+    expect(sm.transactionQueue.pendingCount).toBe(0);
+
+    d.save();
+
+    expect(sm.transactionQueue.pendingCount).toBe(1);
+    expect(db.dbTeam.peek("team-draft-1")).toBe(d);
+  });
+
+  it("draft(input) commits fields set between draft and save()", () => {
+    const d = db.dbTeam.draft({ id: "team-draft-2", name: "Initial" });
+    d.name = "Edited before save";
+    d.save();
+
+    expect(db.dbTeam.peek("team-draft-2")?.name).toBe("Edited before save");
+  });
+
+  it("draft() with no input mints an id and stays uncommitted until save()", () => {
+    const d = db.dbTeam.draft();
+    expect(typeof d.id).toBe("string");
+    expect(d.id.length).toBeGreaterThan(0);
+    expect(sm.transactionQueue.pendingCount).toBe(0);
+
+    d.name = "Built up";
+    d.save();
+
+    expect(sm.transactionQueue.pendingCount).toBe(1);
+    expect(db.dbTeam.peek(d.id)?.name).toBe("Built up");
+  });
+
+  it("an abandoned draft(input) leaves no pool entry and no transaction", () => {
+    const d = db.dbTeam.draft({ id: "team-draft-abandon", name: "Ghost" });
+    void d;
+    expect(sm.objectPool.getById("DbTeam", "team-draft-abandon")).toBeUndefined();
+    expect(sm.transactionQueue.pendingCount).toBe(0);
+  });
+
+  it("draft(input) folds into an open store.batch as one boundary", () => {
+    db.batch(() => {
+      const a = db.dbTeam.draft({ id: "team-draft-b1", name: "A" });
+      a.save();
+      const b = db.dbTeam.draft({ id: "team-draft-b2", name: "B" });
+      b.save();
+    });
+    // Two creates, one batch → collapses to a single undo entry.
+    expect(sm.transactionQueue.undoDepth).toBe(1);
+    expect(db.dbTeam.peek("team-draft-b1")?.name).toBe("A");
+    expect(db.dbTeam.peek("team-draft-b2")?.name).toBe("B");
+  });
+
+  it("draft(id) resolves the existing record and stages edits until save()", async () => {
+    db.dbTeam.create({ id: "team-draft-existing", name: "Original" });
+    const before = sm.transactionQueue.pendingCount;
+
+    const d = await db.dbTeam.draft("team-draft-existing");
+    expect(d).toBe(db.dbTeam.peek("team-draft-existing"));
+
+    d.name = "Staged edit";
+    expect(sm.transactionQueue.pendingCount).toBe(before);
+
+    d.save();
+    expect(sm.transactionQueue.pendingCount).toBe(before + 1);
+    expect(db.dbTeam.peek("team-draft-existing")?.name).toBe("Staged edit");
+  });
+
+  it("draft(id) rejects when no record with that id exists", async () => {
+    await expect(db.dbTeam.draft("nope")).rejects.toThrow(
+      /no record with id "nope"/,
     );
   });
 });
@@ -172,12 +262,12 @@ describe("createStore — delete", () => {
       id: "issue-cascade",
       teamId: "team-cascade",
     });
-    expect(db.dbIssue.peek("issue-cascade")).not.toBeNull();
+    expect(db.dbIssue.peek("issue-cascade")).toBeDefined();
 
     db.dbTeam.delete("team-cascade");
 
-    expect(db.dbIssue.peek("issue-cascade")).toBeNull();
-    expect(db.dbTeam.peek("team-cascade")).toBeNull();
+    expect(db.dbIssue.peek("issue-cascade")).toBeUndefined();
+    expect(db.dbTeam.peek("team-cascade")).toBeUndefined();
   });
 
   it("throws when the record is not in the pool", () => {
@@ -220,8 +310,8 @@ describe("createStore — batch", () => {
     const before = queue.pendingCount;
 
     const batchId = db.batch(() => {
-      db.dbTeam.update("team-batch-1", { name: "B" });
-      db.dbTeam.update("team-batch-1", { name: "C" });
+      db.dbTeam.patch("team-batch-1", { name: "B" });
+      db.dbTeam.patch("team-batch-1", { name: "C" });
     });
 
     expect(begin).toHaveBeenCalledTimes(1);
@@ -233,7 +323,7 @@ describe("createStore — batch", () => {
   it("returns the batchId from a sync batch", () => {
     db.dbTeam.create({ id: "team-batch-2", name: "X" });
     const batchId = db.batch(() => {
-      db.dbTeam.update("team-batch-2", { name: "Y" });
+      db.dbTeam.patch("team-batch-2", { name: "Y" });
     });
     expect(typeof batchId).toBe("string");
     expect(batchId.length).toBeGreaterThan(0);
@@ -244,9 +334,9 @@ describe("createStore — batch", () => {
     const end = vi.spyOn(sm.transactionQueue, "endBatch");
 
     const result = db.batch(async () => {
-      db.dbTeam.update("team-batch-3", { name: "Q" });
+      db.dbTeam.patch("team-batch-3", { name: "Q" });
       await Promise.resolve();
-      db.dbTeam.update("team-batch-3", { name: "R" });
+      db.dbTeam.patch("team-batch-3", { name: "R" });
     });
     expect(result).toBeInstanceOf(Promise);
 
@@ -262,7 +352,7 @@ describe("createStore — batch", () => {
 
     expect(() =>
       db.batch(() => {
-        db.dbTeam.update("team-batch-4", { name: "J" });
+        db.dbTeam.patch("team-batch-4", { name: "J" });
         throw new Error("boom");
       }),
     ).toThrow(/boom/);
@@ -290,8 +380,8 @@ describe("createStore — batch", () => {
 
     expect(begin).toHaveBeenCalledTimes(1);
     expect(end).toHaveBeenCalledTimes(1);
-    expect(db.dbTeam.peek("team-batch-del")).toBeNull();
-    expect(db.dbIssue.peek("issue-batch-del")).toBeNull();
+    expect(db.dbTeam.peek("team-batch-del")).toBeUndefined();
+    expect(db.dbIssue.peek("issue-batch-del")).toBeUndefined();
   });
 
   it("rejects nested batches instead of overwriting the active batch", () => {
@@ -299,9 +389,9 @@ describe("createStore — batch", () => {
 
     expect(() =>
       db.batch(() => {
-        db.dbTeam.update("team-batch-nested", { name: "Inner" });
+        db.dbTeam.patch("team-batch-nested", { name: "Inner" });
         db.batch(() => {
-          db.dbTeam.update("team-batch-nested", { name: "NeverRuns" });
+          db.dbTeam.patch("team-batch-nested", { name: "NeverRuns" });
         });
       }),
     ).toThrow(/Nested batches are not supported/);
@@ -310,7 +400,7 @@ describe("createStore — batch", () => {
     expect(db.dbTeam.peek("team-batch-nested")?.name).toBe("Inner");
     expect(() =>
       db.batch(() => {
-        db.dbTeam.update("team-batch-nested", { name: "Recovered" });
+        db.dbTeam.patch("team-batch-nested", { name: "Recovered" });
       }),
     ).not.toThrow();
     expect(db.dbTeam.peek("team-batch-nested")?.name).toBe("Recovered");
@@ -329,12 +419,12 @@ describe("createStore — atomic", () => {
 
   it("returns the async callback's value and commits staged edits", async () => {
     db.dbTeam.create({ id: "team-atom-1", name: "Old" });
-    // The schema-first record type doesn't expose BaseModel methods like
-    // `optimisticUpdate` — reach into the pool for the staged-edit path.
+    // The schema-first record type doesn't expose the BaseModel staging
+    // primitive `assign` — reach into the pool for the staged-edit path.
     const team = sm.objectPool.getById("DbTeam", "team-atom-1")!;
 
     const out = await db.atomic(async () => {
-      team.optimisticUpdate({ name: "New" });
+      team.assign({ name: "New" });
       await Promise.resolve();
       return "done";
     });
@@ -343,13 +433,13 @@ describe("createStore — atomic", () => {
     expect(db.dbTeam.peek("team-atom-1")?.name).toBe("New");
   });
 
-  it("rolls back staged optimisticUpdate when the fn throws", () => {
+  it("rolls back staged assign when the fn throws", () => {
     db.dbTeam.create({ id: "team-atom-2", name: "Original" });
     const team = sm.objectPool.getById("DbTeam", "team-atom-2")!;
 
     expect(() =>
       db.atomic(() => {
-        team.optimisticUpdate({ name: "Staged" });
+        team.assign({ name: "Staged" });
         throw new Error("boom");
       }),
     ).toThrow(/boom/);
@@ -478,7 +568,7 @@ describe("createStore — subscriptions", () => {
     const cb = vi.fn();
     const unsubscribe = team.watch((t) => t.name, cb);
 
-    db.dbTeam.update("team-rw", { name: "v2" });
+    db.dbTeam.patch("team-rw", { name: "v2" });
 
     expect(cb).toHaveBeenCalledTimes(1);
     // MobX reaction passes (next, prev, Reaction) — typed signature hides the
@@ -492,7 +582,7 @@ describe("createStore — subscriptions", () => {
   it("relation collection subscribe is exposed via the typed surface", () => {
     const team = db.dbTeam.create({ id: "team-coll-sub", name: "T" });
     const cb = vi.fn();
-    const unsubscribe = team.issues.subscribe(cb);
+    const unsubscribe = team.issues.watch(cb);
 
     expect(typeof unsubscribe).toBe("function");
     unsubscribe();
@@ -757,7 +847,7 @@ describe("createStore — undo / redo", () => {
   it("undo reverts the most recent batch and bumps redoDepth", async () => {
     db.dbTeam.create({ id: "team-undo-2", name: "before" });
     db.batch(() => {
-      db.dbTeam.update("team-undo-2", { name: "after" });
+      db.dbTeam.patch("team-undo-2", { name: "after" });
     });
     expect(db.dbTeam.peek("team-undo-2")?.name).toBe("after");
 
@@ -770,7 +860,7 @@ describe("createStore — undo / redo", () => {
 
   it("redo replays the undone batch", async () => {
     db.dbTeam.create({ id: "team-undo-3", name: "v1" });
-    db.dbTeam.update("team-undo-3", { name: "v2" });
+    db.dbTeam.patch("team-undo-3", { name: "v2" });
     expect(db.dbTeam.peek("team-undo-3")?.name).toBe("v2");
 
     await db.undo();

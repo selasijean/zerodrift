@@ -3,8 +3,8 @@
  *
  * Hooks subscribe to ObjectPool change notifications via useSyncExternalStore,
  * so a delta packet that adds, updates, or removes a model automatically
- * re-renders any component reading it through `useModel` / `useModels` /
- * `useIndexedCollection` (or directly via `useCollection` / `useBackRef`).
+ * re-renders any component reading it through `useRecord` / `useRecords` /
+ * `useRecordsByIndex` (or a relation via `useRelation`).
  */
 
 import React, {
@@ -226,27 +226,37 @@ function useLoader(
 }
 
 /**
- * Shared shape for the load-aware hooks: `item` / `items` / `value`
- * payload plus the lifecycle bag (`isLoading`, `error`, `reload`).
- * Internal — exposed via the individual hook return types.
+ * Uniform async-resource shape for every load-aware hook (`useRecord`,
+ * `useRecords`, `useRecordsByIndex`, `useRelation`). `data` is the payload
+ * (`T | null` for a single record, `T[]` for a list); the rest is the
+ * lifecycle bag. `isLoaded` is true once the first resolve settled without
+ * error (a pool hit counts as resolved from frame zero).
  */
-interface LoaderBase {
+export interface AsyncResource<T> {
+  data: T;
   isLoading: boolean;
+  isLoaded: boolean;
   error: Error | null;
   reload: () => Promise<void>;
 }
-interface LoaderItemResult<T> extends LoaderBase {
-  item: T | null;
-}
-interface LoaderItemsResult<T> extends LoaderBase {
-  items: T[];
-}
+
+/** `isLoaded` for the pool-keyed hooks: ready, not loading, no error — true
+ * from frame zero on a pool hit (the loader's auto-fire is gated). */
+const settled = (
+  ready: boolean,
+  isLoading: boolean,
+  error: Error | null,
+): boolean => ready && !isLoading && error == null;
+
+// Model-name-keyed implementations. The public hooks resolve a handle
+// (schema namespace or model class) to a registry name and delegate here,
+// so the pool-subscription / loader machinery lives in exactly one place.
 
 /** Reactive single model by id. Pool-first sync read; async backfill on miss. */
-export function useModel<T extends BaseModel = BaseModel>(
+function useRecordByName<T extends BaseModel>(
   modelName: string,
   id: string | null | undefined,
-): LoaderItemResult<T> {
+): AsyncResource<T | null> {
   const { sm, status } = useSyncEngine();
   const pool = sm.objectPool;
   const ready = status.phase === BootstrapPhase.Ready;
@@ -259,27 +269,28 @@ export function useModel<T extends BaseModel = BaseModel>(
     () => sm.getOrLoadById(modelName, id!),
     ready && id != null,
     `${modelName}:${id ?? ""}`,
-    // Skip the load when the pool already has the entry — instant models render
-    // with isLoading: false from frame zero.
+    // Skip the load when the pool already has the entry — instant models
+    // render with isLoading: false from frame zero.
     () => id != null && pool.getById(modelName, id) == null,
   );
 
   return {
-    item: ready ? (item as T | null) : null,
+    data: ready ? (item as T | null) : null,
     isLoading,
+    isLoaded: settled(ready, isLoading, error),
     error,
     reload,
   };
 }
 
-/** Reactive list of models of a type, optionally filtered to a specific id set.
- * Without `ids`: every instance in the pool. With `ids`: just those, in the
- * order given, with async backfill for any missing from the pool. The ids
- * array is compared by content so inline literals don't cause re-fetches. */
-export function useModels<T extends BaseModel = BaseModel>(
+/** Reactive list of models of a type, optionally filtered to a specific id
+ * set. Without `ids`: every instance in the pool. With `ids`: just those, in
+ * the order given, with async backfill for any missing from the pool. The
+ * ids array is compared by content so inline literals don't cause re-fetches. */
+function useRecordsByName<T extends BaseModel>(
   modelName: string,
   ids?: string[] | null,
-): LoaderItemsResult<T> {
+): AsyncResource<T[]> {
   const { sm, status } = useSyncEngine();
   const pool = sm.objectPool;
   const ready = status.phase === BootstrapPhase.Ready;
@@ -305,65 +316,40 @@ export function useModels<T extends BaseModel = BaseModel>(
   );
 
   return {
-    items: ready ? (items as T[]) : [],
+    data: ready ? (items as T[]) : [],
     isLoading,
+    isLoaded: settled(ready, isLoading, error),
     error,
     reload,
   };
 }
 
-/** Reactive list of models matching a foreign-key index, e.g. `teamId === id`.
- * Fires `getOrLoadCollection` on first use; subsequent calls hit the cache. */
-export function useIndexedCollection<T extends BaseModel = BaseModel>(
-  modelName: string,
-  indexKey: string,
-  value: string | null | undefined,
-): LoaderItemsResult<T> {
-  const { sm, status } = useSyncEngine();
-  const ready = status.phase === BootstrapPhase.Ready;
-  const hasValue = value != null && value !== "";
-
-  const all = usePoolSnapshot(modelName, () => sm.objectPool.getAll(modelName));
-
-  const items = useMemo(() => {
-    if (!hasValue) {
-      return [];
-    }
-    return all.filter((m) => readFk(m, indexKey) === value);
-  }, [all, indexKey, value, hasValue]);
-
-  const { isLoading, error, reload } = useLoader(
-    () => sm.getOrLoadCollection(modelName, indexKey, value!),
-    ready && hasValue,
-    `${modelName}:${indexKey}:${value ?? ""}`,
-    () => hasValue && !sm.isCollectionLoaded(modelName, indexKey, value!),
-  );
-
-  return {
-    items: ready ? (items as T[]) : [],
-    isLoading,
-    error,
-    reload,
-  };
-}
-
-/** Reactive list of models matching ANY of `values` on a foreign-key index.
- * Fans out `getOrLoadCollection` per value in parallel; coverage is tracked
- * per `(name, indexKey, value)` so re-renders don't re-fetch buckets that
- * are already covered. The `values` array is compared by content so inline
- * literals don't trigger re-fetches.
+/** Reactive list of models matching one OR many values on a foreign-key
+ * index. A single string and a `string[]` take the same path (the single
+ * value is a one-element set), so semantics are identical. Coverage is
+ * tracked per `(name, indexKey, value)` so re-renders don't re-fetch
+ * already-covered buckets; values are compared by content so inline literals
+ * don't trigger re-fetches.
  *
- * For one-round-trip multi-value fetches, configure `onDemandIndexBatchFetcher`
- * + `serverSupportsCompoundIndexKeys: true` — see `agent-docs/04-lazy-loading.md`. */
-export function useIndexedCollections<T extends BaseModel = BaseModel>(
+ * For one-round-trip multi-value fetches, configure
+ * `onDemandIndexBatchFetcher` + `serverSupportsCompoundIndexKeys: true` —
+ * see `agent-docs/04-lazy-loading.md`. */
+function useRecordsByIndexName<T extends BaseModel>(
   modelName: string,
   indexKey: string,
-  values: readonly string[] | null | undefined,
-): LoaderItemsResult<T> {
+  value: string | readonly string[] | null | undefined,
+): AsyncResource<T[]> {
   const { sm, status } = useSyncEngine();
   const ready = status.phase === BootstrapPhase.Ready;
-  const valuesKey = (values ?? []).join(",");
-  const hasValues = values != null && values.length > 0;
+
+  const values =
+    value == null
+      ? []
+      : (Array.isArray(value) ? value : [value as string]).filter(
+          (v) => v != null && v !== "",
+        );
+  const valuesKey = values.join(",");
+  const hasValues = values.length > 0;
 
   const all = usePoolSnapshot(modelName, () => sm.objectPool.getAll(modelName));
 
@@ -382,21 +368,20 @@ export function useIndexedCollections<T extends BaseModel = BaseModel>(
   const { isLoading, error, reload } = useLoader(
     async () => {
       await Promise.all(
-        (values ?? []).map((v) => sm.getOrLoadCollection(modelName, indexKey, v)),
+        values.map((v) => sm.getOrLoadCollection(modelName, indexKey, v)),
       );
     },
     ready && hasValues,
     `${modelName}:${indexKey}:${valuesKey}`,
     () =>
       hasValues &&
-      (values ?? []).some(
-        (v) => !sm.isCollectionLoaded(modelName, indexKey, v),
-      ),
+      values.some((v) => !sm.isCollectionLoaded(modelName, indexKey, v)),
   );
 
   return {
-    items: ready ? (items as T[]) : [],
+    data: ready ? (items as T[]) : [],
     isLoading,
+    isLoaded: settled(ready, isLoading, error),
     error,
     reload,
   };
@@ -406,10 +391,13 @@ export function useIndexedCollections<T extends BaseModel = BaseModel>(
 // Batch and undo/redo
 // ---------------------------------------------------------------------------
 
-export function useBatch() {
+/** Returns `store.batch` — the sync overload yields the `batchId` string,
+ * the async overload a `Promise<string>`. */
+export function useBatch(): StoreManager["batch"] {
   const { sm } = useSyncEngine();
   return useCallback(
-    (fn: () => void | Promise<void>) => sm.batch(fn as () => void),
+    ((fn: () => void | Promise<void>) =>
+      sm.batch(fn as () => void)) as StoreManager["batch"],
     [sm],
   );
 }
@@ -447,91 +435,75 @@ export function useUndoRedo() {
 }
 
 // ---------------------------------------------------------------------------
-// useCollection — subscribe to a RefCollection directly
+// useRelation — watch a relation object (RefCollection or BackRef)
 //
-// The cleanest way to use ReferenceCollections in components:
+//   const { data: issue }   = useRecord(store.issue, issueId);
+//   const { data: comments } = useRelation(issue?.comments);  // collection → T[]
+//   const { data: favorite } = useRelation(issue?.favorite);  // back-ref   → T|null
 //
-//   const team = useModel("Team", teamId);
-//   const { items, isLoading, reload } = useCollection(team?.issues);
-//
-// Triggers load() on mount. Re-renders when the collection is invalidated
-// (e.g. delta packet adds an Issue to this team). Uses the collection's
-// subscribe() method for proper reactivity.
+// Loads on mount, re-renders on invalidation. The *-to-many overload yields
+// `T[]`; the back-reference overload yields `T | null`; both via
+// `AsyncResource`.
 // ---------------------------------------------------------------------------
 
-export function useCollection<T extends BaseModel = BaseModel>(
-  collection: LazyCollectionBase<T> | null | undefined,
-) {
+export function useRelation<T extends BaseModel = BaseModel>(
+  relation: LazyCollectionBase<T> | null | undefined,
+): AsyncResource<T[]>;
+export function useRelation<T extends BaseModel = BaseModel>(
+  relation: BackRef<T> | null | undefined,
+): AsyncResource<T | null>;
+export function useRelation(
+  relation:
+    | LazyCollectionBase<BaseModel>
+    | BackRef<BaseModel>
+    | null
+    | undefined,
+): AsyncResource<BaseModel[] | BaseModel | null> {
   const [tick, forceRender] = useState(0);
+  const isBackRef = relation instanceof BackRef;
 
-  // Subscribe to collection invalidation events
+  // Collections expose watch() for invalidation; BackRef does not.
   useEffect(() => {
-    if (collection == null) {
+    if (relation == null || isBackRef) {
       return;
     }
-    return collection.subscribe(() => forceRender((n) => n + 1));
-  }, [collection]);
+    return (relation as LazyCollectionBase<BaseModel>).watch(() =>
+      forceRender((n) => n + 1),
+    );
+  }, [relation, isBackRef]);
 
-  // Trigger load on mount or after invalidation
   useEffect(() => {
-    if (collection != null && !collection.isLoaded && !collection.isLoading) {
-      collection.load().then(() => forceRender((n) => n + 1));
+    if (relation != null && !relation.isLoaded && !relation.isLoading) {
+      relation.load().then(() => forceRender((n) => n + 1));
     }
-  }, [collection, tick]);
+  }, [relation, tick]);
 
-  if (collection == null) {
+  if (relation == null) {
+    // Can't tell collection from back-ref at null; `[]` is the map-safe
+    // default. A null back-ref reads `[]` rather than `null` — harmless
+    // (consumers use `data?.x`), and the relation object is non-null
+    // whenever its holding record exists.
     return {
-      items: [] as T[],
+      data: [],
       isLoading: false,
       isLoaded: false,
       error: null,
-      reload: () => {},
+      reload: async () => {},
     };
   }
 
   return {
-    items: (collection.items ?? []) as T[],
-    isLoading: collection.isLoading ?? false,
-    isLoaded: collection.isLoaded ?? false,
-    error: collection.error ?? null,
-    reload: () => collection.reload(),
-  };
-}
-
-// ---------------------------------------------------------------------------
-// useBackRef — subscribe to a BackRef directly
-//
-//   const issue = useModel("Issue", issueId);
-//   const { value: favorite, isLoading } = useBackRef(issue?.favorite);
-// ---------------------------------------------------------------------------
-
-export function useBackRef<T extends BaseModel = BaseModel>(
-  backRef: BackRef<T> | null | undefined,
-) {
-  const [tick, forceRender] = useState(0);
-
-  useEffect(() => {
-    if (backRef != null && !backRef.isLoaded && !backRef.isLoading) {
-      backRef.load().then(() => forceRender((n) => n + 1));
-    }
-  }, [backRef, tick]);
-
-  if (backRef == null) {
-    return {
-      value: null as T | null,
-      isLoading: false,
-      isLoaded: false,
-      error: null,
-      reload: () => {},
-    };
-  }
-
-  return {
-    value: (backRef.value ?? null) as T | null,
-    isLoading: backRef.isLoading ?? false,
-    isLoaded: backRef.isLoaded ?? false,
-    error: backRef.error ?? null,
-    reload: () => backRef.load(),
+    data: isBackRef
+      ? ((relation as BackRef<BaseModel>).value ?? null)
+      : ((relation as LazyCollectionBase<BaseModel>).items ?? []),
+    isLoading: relation.isLoading ?? false,
+    isLoaded: relation.isLoaded ?? false,
+    error: relation.error ?? null,
+    reload: async () => {
+      await (isBackRef
+        ? (relation as BackRef<BaseModel>).load()
+        : (relation as LazyCollectionBase<BaseModel>).reload());
+    },
   };
 }
 
@@ -555,14 +527,20 @@ function useStableCallback<TParams extends unknown[], TResult>(
 
 
 // ---------------------------------------------------------------------------
-// Typed schema-first hooks
+// Public read hooks — keyed by a "handle"
 //
-// `useEntity(store.<entity>, id)`, `useEntities(store.<entity>, ids?)`, and
-// `useEntitiesByIndex(store.<entity>, key, value)` are schema-aware
-// counterparts of the string-keyed hooks above. They infer the record
-// type from the namespace and constrain the index key against the
-// schema's `.indexed()` fields. Internally they extract the registry
-// name from the namespace and delegate to the same primitives.
+// A handle is either a schema namespace (`store.issue`) or a decorator
+// model class (`Issue`). Both resolve to a registry name; the record type
+// is inferred from whichever form was passed, so the same four hooks serve
+// both authoring paths with one vocabulary:
+//
+//   useRecord(handle, id)               → AsyncResource<T | null>
+//   useRecords(handle, ids?)            → AsyncResource<T[]>
+//   useRecordsByIndex(handle, key, v|v[]) → AsyncResource<T[]>
+//   useRelation(record.relation)        → AsyncResource<T[] | T | null>
+//
+// For namespace handles the index key is constrained to the schema's
+// `.indexed()` fields; for class handles it's `string`.
 // ---------------------------------------------------------------------------
 
 import {
@@ -576,69 +554,95 @@ import type { SchemaDef } from "../schema/types";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyNamespace = EntityNamespace<any, any, any>;
+// `abstract new` so both `class X` and abstract bases satisfy it.
+type ModelCtor<T extends BaseModel = BaseModel> = abstract new (
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ...args: any[]
+) => T;
+type Handle = AnyNamespace | ModelCtor;
 
-type RecordOf<NS> = NS extends EntityNamespace<infer S, infer K, infer Exts>
-  ? S extends SchemaDef
-    ? K extends EntityKey<S>
-      ? Exts extends readonly ExtensionDescriptor<S>[]
-        ? RecordWithExtensions<S, K, Exts>
+// Namespace projections, factored out so the handle types compose them
+// rather than re-spelling the EntityNamespace → record/indexed-key chain.
+type RecordOfNamespace<NS> =
+  NS extends EntityNamespace<infer S, infer K, infer Exts>
+    ? S extends SchemaDef
+      ? K extends EntityKey<S>
+        ? Exts extends readonly ExtensionDescriptor<S>[]
+          ? RecordWithExtensions<S, K, Exts>
+          : never
         : never
       : never
-    : never
-  : never;
+    : never;
 
-type IndexedKeysOf<NS> = NS extends EntityNamespace<infer S, infer K, infer _Exts>
-  ? S extends SchemaDef
-    ? K extends EntityKey<S>
-      ? IndexedFieldKeys<S, K>
+type IndexKeyOfNamespace<NS> =
+  NS extends EntityNamespace<infer S, infer K, infer _Exts>
+    ? S extends SchemaDef
+      ? K extends EntityKey<S>
+        ? IndexedFieldKeys<S, K>
+        : never
       : never
-    : never
-  : never;
+    : never;
 
-// `as unknown as` bridges the type-system gap between `BaseModel` (what the
-// underlying string-keyed hooks return) and `RecordOf<NS>` (the schema's
-// typed view of the same instance). They're literally the same object at
-// runtime — `RecordOf<NS>` is a structural projection of the `BaseModel`
-// in the pool — but neither type is assignable to the other (BaseModel
-// has internals like `__mobx`/`store`; RecordOf has schema fields like
-// `title`/`name` plus extension members). One cast per wrapper, contained.
+/** Record type for a handle: the class instance type, or the schema's typed
+ * projection for a namespace. Ctor is checked first — a namespace is a plain
+ * object and never matches `ModelCtor`. */
+type RecordOf<H> =
+  H extends ModelCtor<infer T> ? T : RecordOfNamespace<H>;
 
-export function useEntity<NS extends AnyNamespace>(
-  ns: NS,
+/** Index-key constraint for a handle: schema `.indexed()` fields for a
+ * namespace, unconstrained `string` for a decorator class. */
+type IndexKeyOf<H> =
+  H extends ModelCtor ? string : IndexKeyOfNamespace<H>;
+
+function handleRegistryName(handle: Handle): string {
+  if (typeof handle === "function") {
+    // Set by @ClientModel (explicit { name } or ctor.name fallback).
+    return (
+      (handle as { _modelName?: string })._modelName ??
+      (handle as { name: string }).name
+    );
+  }
+  return entityNamespaceRegistryName(handle as AnyNamespace);
+}
+
+// `as unknown as` bridges `BaseModel` (what the internal name-keyed hooks
+// return) and `RecordOf<H>` (the typed view of the same pooled instance).
+// Same object at runtime; neither type is assignable to the other (BaseModel
+// has `__mobx`/`store`; RecordOf has schema fields + extensions). One cast
+// per wrapper, contained.
+
+/** Reactive single record by id. Pool-first sync read; async backfill on miss. */
+export function useRecord<H extends Handle>(
+  handle: H,
   id: string | null | undefined,
-): LoaderItemResult<RecordOf<NS>> {
-  return useModel(entityNamespaceRegistryName(ns), id) as unknown as
-    LoaderItemResult<RecordOf<NS>>;
+): AsyncResource<RecordOf<H> | null> {
+  return useRecordByName(
+    handleRegistryName(handle),
+    id,
+  ) as unknown as AsyncResource<RecordOf<H> | null>;
 }
 
-export function useEntities<NS extends AnyNamespace>(
-  ns: NS,
+/** Reactive list of records, optionally filtered to (and ordered by) `ids`. */
+export function useRecords<H extends Handle>(
+  handle: H,
   ids?: string[] | null,
-): LoaderItemsResult<RecordOf<NS>> {
-  return useModels(entityNamespaceRegistryName(ns), ids) as unknown as
-    LoaderItemsResult<RecordOf<NS>>;
+): AsyncResource<RecordOf<H>[]> {
+  return useRecordsByName(
+    handleRegistryName(handle),
+    ids,
+  ) as unknown as AsyncResource<RecordOf<H>[]>;
 }
 
-export function useEntitiesByIndex<NS extends AnyNamespace>(
-  ns: NS,
-  indexKey: IndexedKeysOf<NS>,
-  value: string | null | undefined,
-): LoaderItemsResult<RecordOf<NS>> {
-  return useIndexedCollection(
-    entityNamespaceRegistryName(ns),
-    indexKey,
+/** Reactive list of records matching one value, or any of several, on a
+ * foreign-key index. */
+export function useRecordsByIndex<H extends Handle>(
+  handle: H,
+  indexKey: IndexKeyOf<H>,
+  value: string | readonly string[] | null | undefined,
+): AsyncResource<RecordOf<H>[]> {
+  return useRecordsByIndexName(
+    handleRegistryName(handle),
+    indexKey as string,
     value,
-  ) as unknown as LoaderItemsResult<RecordOf<NS>>;
-}
-
-export function useEntitiesByIndexValues<NS extends AnyNamespace>(
-  ns: NS,
-  indexKey: IndexedKeysOf<NS>,
-  values: readonly string[] | null | undefined,
-): LoaderItemsResult<RecordOf<NS>> {
-  return useIndexedCollections(
-    entityNamespaceRegistryName(ns),
-    indexKey,
-    values,
-  ) as unknown as LoaderItemsResult<RecordOf<NS>>;
+  ) as unknown as AsyncResource<RecordOf<H>[]>;
 }

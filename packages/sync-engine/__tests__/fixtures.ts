@@ -125,7 +125,7 @@ export function makeFakeStoreManager(
 
 // ── TestWorkspace ─────────────────────────────────────────────────────────────
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestWorkspace", loadStrategy: LoadStrategy.Eager })
 export class TestWorkspace extends BaseModel {
   @Property()
   public name = "";
@@ -133,7 +133,7 @@ export class TestWorkspace extends BaseModel {
 
 // ── TestProject ───────────────────────────────────────────────────────────────
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestProject", loadStrategy: LoadStrategy.Eager })
 export class TestProject extends BaseModel {
   @Property()
   public title = "";
@@ -154,7 +154,7 @@ export class TestProject extends BaseModel {
 
 // ── TestUser ──────────────────────────────────────────────────────────────────
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestUser", loadStrategy: LoadStrategy.Eager })
 export class TestUser extends BaseModel {
   @Property()
   public name = "";
@@ -165,7 +165,7 @@ export class TestUser extends BaseModel {
 
 // ── TestTask ──────────────────────────────────────────────────────────────────
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestTask", loadStrategy: LoadStrategy.Eager })
 export class TestTask extends BaseModel {
   @Property({ serializer: dateSerializer, deserializer: dateDeserializer })
   public createdAt: Date = new Date();
@@ -196,7 +196,7 @@ export class TestTask extends BaseModel {
 
 // ── TestComment ───────────────────────────────────────────────────────────────
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestComment", loadStrategy: LoadStrategy.Eager })
 export class TestComment extends BaseModel {
   @Property()
   public text = "";
@@ -214,7 +214,7 @@ export class TestComment extends BaseModel {
 // LoadStrategy.Partial means this model is NOT loaded at bootstrap.
 // It is fetched on demand when a collection referencing it is first accessed.
 
-@ClientModel({ loadStrategy: LoadStrategy.Partial })
+@ClientModel({ name: "TestActivity", loadStrategy: LoadStrategy.Partial })
 export class TestActivity extends BaseModel {
   @Property()
   public text = "";
@@ -231,7 +231,7 @@ export class TestActivity extends BaseModel {
 // Both share `layerId` so cross-model eviction (`evictAllByIndex`) has more
 // than one type to walk.
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestLayeredDriver", loadStrategy: LoadStrategy.Eager })
 export class TestLayeredDriver extends BaseModel {
   @Property()
   public name = "";
@@ -240,7 +240,7 @@ export class TestLayeredDriver extends BaseModel {
   public layerId = "";
 }
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestLayeredAccount", loadStrategy: LoadStrategy.Eager })
 export class TestLayeredAccount extends BaseModel {
   @Property()
   public label = "";
@@ -256,7 +256,7 @@ export class TestLayeredAccount extends BaseModel {
 // hydrates, the collection's loader fires one load for `alertId === alert.id`
 // AND one for `groupId === alert.groupId`, unioning the results.
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestScopedAlert", loadStrategy: LoadStrategy.Eager })
 export class TestScopedAlert extends BaseModel {
   @Property()
   public title = "";
@@ -271,7 +271,7 @@ export class TestScopedAlert extends BaseModel {
   public notes: RefCollection<TestAlertNote>;
 }
 
-@ClientModel({ loadStrategy: LoadStrategy.Partial })
+@ClientModel({ name: "TestAlertNote", loadStrategy: LoadStrategy.Partial })
 export class TestAlertNote extends BaseModel {
   @Property()
   public body = "";
@@ -287,7 +287,7 @@ export class TestAlertNote extends BaseModel {
 
 // ── TestMetric (ephemeral / pool-only model) ────────────────────────────────
 
-@ClientModel({ loadStrategy: LoadStrategy.Ephemeral })
+@ClientModel({ name: "TestMetric", loadStrategy: LoadStrategy.Ephemeral })
 export class TestMetric extends BaseModel {
   @Property()
   public value = 0;
@@ -303,7 +303,7 @@ export class TestMetric extends BaseModel {
 // its children load eagerly, and each child's leaves also load, exercising
 // recursive eager hydration through makeModelObservable.
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestEagerLeaf", loadStrategy: LoadStrategy.Eager })
 export class TestEagerLeaf extends BaseModel {
   @Property()
   public label = "";
@@ -312,7 +312,7 @@ export class TestEagerLeaf extends BaseModel {
   public childId = "";
 }
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestEagerChild", loadStrategy: LoadStrategy.Eager })
 export class TestEagerChild extends BaseModel {
   @Property()
   public name = "";
@@ -324,7 +324,7 @@ export class TestEagerChild extends BaseModel {
   public leaves: RefCollection<TestEagerLeaf>;
 }
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestEagerOwner", loadStrategy: LoadStrategy.Eager })
 export class TestEagerOwner extends BaseModel {
   @Property()
   public name = "";
@@ -338,7 +338,7 @@ export class TestEagerOwner extends BaseModel {
 //   refUserId  ──> TestUser     (eager Reference: pulled into the pool)
 //   leafIds[]  ──> TestEagerLeaf (eager OwnedCollection)
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestEagerHolder", loadStrategy: LoadStrategy.Eager })
 export class TestEagerHolder extends BaseModel {
   @Property()
   public name = "";
@@ -367,13 +367,13 @@ export class TestEagerHolder extends BaseModel {
 // the child has indexed `greatId` (denormalized 2 hops). Walking from a great-
 // grandparent collection of children would resolve via two pool hops.
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestDenormGreatParent", loadStrategy: LoadStrategy.Eager })
 export class TestDenormGreatParent extends BaseModel {
   @Property()
   public name = "";
 }
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestDenormGrandparent", loadStrategy: LoadStrategy.Eager })
 export class TestDenormGrandparent extends BaseModel {
   @Property({ indexed: true })
   public greatId = "";
@@ -382,7 +382,7 @@ export class TestDenormGrandparent extends BaseModel {
   public great: TestDenormGreatParent;
 }
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestDenormParent", loadStrategy: LoadStrategy.Eager })
 export class TestDenormParent extends BaseModel {
   @Property({ indexed: true })
   public grandparentId = "";
@@ -394,7 +394,7 @@ export class TestDenormParent extends BaseModel {
   public children: RefCollection<TestDenormChild>;
 }
 
-@ClientModel({ loadStrategy: LoadStrategy.Partial })
+@ClientModel({ name: "TestDenormChild", loadStrategy: LoadStrategy.Partial })
 export class TestDenormChild extends BaseModel {
   @Property({ indexed: true })
   public parentId = "";
@@ -423,19 +423,19 @@ export abstract class TestAbstractBase extends BaseModel {
   public sharedTaskId = "";
 }
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestSharedSubclassA", loadStrategy: LoadStrategy.Eager })
 export class TestSharedSubclassA extends TestAbstractBase {
   @Property()
   public extraA = 0;
 }
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestSharedSubclassB", loadStrategy: LoadStrategy.Eager })
 export class TestSharedSubclassB extends TestAbstractBase {
   @Property()
   public extraB = false;
 }
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "TestNote", loadStrategy: LoadStrategy.Eager })
 export class TestNote extends BaseModel {
   @Property()
   public content = "";

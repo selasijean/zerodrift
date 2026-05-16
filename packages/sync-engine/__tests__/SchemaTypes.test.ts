@@ -18,7 +18,7 @@ import {
 const schema = defineSchema({
   entities: {
     team: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id: s.id(),
         name: s.string(),
@@ -27,7 +27,7 @@ const schema = defineSchema({
       },
     }),
     user: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id: s.id(),
         name: s.string(),
@@ -35,7 +35,7 @@ const schema = defineSchema({
       },
     }),
     issue: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id: s.id(),
         title: s.string(),
@@ -266,7 +266,7 @@ describe("self-referential links", () => {
   const selfSchema = defineSchema({
     entities: {
       issue: entity({
-        loadStrategy: LoadStrategy.Instant,
+        loadStrategy: LoadStrategy.Eager,
         fields: {
           id: s.id(),
           title: s.string(),

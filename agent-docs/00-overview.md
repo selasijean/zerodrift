@@ -9,7 +9,7 @@ The engine is a publishable npm package at `packages/sync-engine`. All source fi
 ```
 ┌─────────────────────────────────────────────────────────┐
 │           React Components  /  Headless Agents           │
-│    useModels / useModel / useCollection / model.watch()  │
+│   useRecords / useRecord / useRelation / model.watch()   │
 └─────────────────────┬───────────────────────────────────┘
                       │
 ┌─────────────────────▼───────────────────────────────────┐
@@ -62,7 +62,7 @@ All files are under `packages/sync-engine/src/`.
 | `ModelStream` | `core/ModelStream.ts` | Secondary SSE connection for external services; updates existing pool models in-place, never inserts new ones |
 | `EphemeralStore` | `core/Store.ts` | No-op store for `Ephemeral` models — skips all IDB loading |
 | `StoreManager` | `core/StoreManager.ts` | Top-level orchestrator; wires everything together |
-| React hooks | `react/index.tsx` | `useModels`, `useModel`, `useCollection`, `useUndoRedo` |
+| React hooks | `react/index.tsx` | `useRecords`, `useRecord`, `useRecordsByIndex`, `useRelation`, `useUndoRedo` |
 
 ## The Data Flow
 

@@ -3,7 +3,7 @@ import type { RefCollection } from "sync-engine";
 import type { Issue } from "./Issue";
 import { dateSerializer, dateDeserializer } from "./serializers";
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "Team", loadStrategy: LoadStrategy.Eager })
 export class Team extends BaseModel {
   @Property({ serializer: dateSerializer, deserializer: dateDeserializer })
   public createdAt: Date = new Date();

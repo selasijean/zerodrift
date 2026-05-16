@@ -149,13 +149,13 @@ The SSE stream delivers a delta → pool updates → subscription fires → agen
 
 Note: `objectPool.subscribe` fires on structural changes (instances added/removed). For property-level changes on existing instances, use `model.watch()` below — in-place updates go through MobX observable boxes, not pool-level notifications.
 
-### `collection.subscribe` — relationship-level reactivity
+### `collection.watch` — relationship-level reactivity
 
-Fires when `items` change — a child is attached or detached by the inverse-link machinery (delta inserts / removes / FK changes), `setItems` runs, or `load()` resolves. See [10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md).
+Fires when `items` change — a child is attached or detached by the inverse-link machinery (delta inserts / removes / FK changes), `setItems` runs, or `load()` resolves. Same verb as `model.watch` / `store.<entity>.watchAll`. See [10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md).
 
 ```typescript
 const team = sm.objectPool.getById("Team", teamId) as Team;
-const unsubscribe = team.issues.subscribe(() => {
+const unwatch = team.issues.watch(() => {
   // team.issues.items is now current
 });
 ```

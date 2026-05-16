@@ -45,7 +45,7 @@ subscribe(modelName: string, listener: () => void): () => void
 notify(modelName: string): void
 ```
 
-`pool.put()` and `pool.remove()` call `notify(modelName)`, which fires all subscribed listeners for that model type. The React hooks (`useModels`, `useModel`) subscribe to these notifications via `useSyncExternalStore`.
+`pool.put()` and `pool.remove()` call `notify(modelName)`, which fires all subscribed listeners for that model type. The React hooks (`useRecords`, `useRecord`) subscribe to these notifications via `useSyncExternalStore`.
 
 Note: `hydrateAndPut` is the primary method for adding or updating models. When updating an existing instance, it hydrates data in-place (updating MobX observable boxes directly) **without** calling `put`/`notify` — avoiding unnecessary pool-level notifications and snapshot cache invalidation. MobX handles property-level reactivity through the observable boxes. Pool-level `notify` only fires on structural changes (new instance added or instance removed).
 
@@ -53,7 +53,7 @@ This is the mechanism that makes the UI feel live — components don't poll; the
 
 ## Benefits
 
-### Instant, synchronous relationship traversal
+### Eager, synchronous relationship traversal
 No `await` needed to navigate from an Issue to its Team to the Team's members. It's all in-memory object graph traversal.
 
 ### Single instance per entity
@@ -74,9 +74,9 @@ Insert, lookup, delete — all constant time regardless of how many instances ex
 The pool notifies at the model-type level, not per-instance. Every component subscribed to "Issue" re-checks its snapshot when **any** issue changes. For large collections with many subscribers, this can cause unnecessary snapshot comparison work. (React's `useSyncExternalStore` handles this — it only re-renders if the snapshot actually changed — but the comparison still runs.)
 
 ### Memory is unbounded by default
-For models with `LoadStrategy.Instant`, **every instance is loaded into the pool at bootstrap** and stays there. If an Issue is deleted, it's removed. But there's no eviction — instances don't expire. If you have 50,000 issues across 100 teams, and a user is only ever on one team, all 50,000 still live in the pool.
+For models with `LoadStrategy.Eager`, **every instance is loaded into the pool at bootstrap** and stays there. If an Issue is deleted, it's removed. But there's no eviction — instances don't expire. If you have 50,000 issues across 100 teams, and a user is only ever on one team, all 50,000 still live in the pool.
 
-This is mitigated by `LoadStrategy.Lazy` and `LoadStrategy.Partial`, but for Instant models, you pay the full cost upfront.
+This is mitigated by `LoadStrategy.Lazy` and `LoadStrategy.Partial`, but for Eager models, you pay the full cost upfront.
 
 ### No query language
 The pool is just a flat Map per model type. There are no indexes, no filtering, no sorting built into the pool itself. If you want all Issues with `priority > 2`, you call `pool.getAll("Issue").filter(...)`. For large datasets, this is a linear scan. IndexedDB indexes exist for efficient bootstrap loading, but in-memory querying is always O(n).
@@ -87,19 +87,19 @@ If `issue.teamId` is set but the Team hasn't been loaded yet, `issue.team` retur
 ### Instance identity makes diffing harder
 Because you have one instance per entity, there's no "previous vs current" snapshot to diff — the instance is mutated in place. The undo/redo system handles this by recording old/new values in Transaction objects, but it does mean you can't naively compare two pool snapshots to see what changed.
 
-## The Instant vs Partial Split
+## The Eager vs Partial Split
 
 Not all models live fully in the pool. The `LoadStrategy` on each model controls this:
 
 | Strategy | Pool at startup | Loaded when |
 |---|---|---|
-| `Instant` | All instances | Bootstrap |
+| `Eager` | All instances | Bootstrap |
 | `Lazy` | None | On first access via collection or explicit load |
 | `Partial` | Only referenced ones | When a parent model referencing them is loaded |
-| `ExplicitlyRequested` | None | Only when code calls `sm.getOrLoadById(...)` |
+| `LocalOnly` | From IDB | Persisted locally, never synced |
 | `Ephemeral` | None | On demand via `getOrLoadCollection`/`getOrLoadByIds`; never persisted to IDB |
 
-`FullStore` (for Instant models) loads everything at bootstrap. `PartialStore` (for the rest) loads nothing — instances trickle in on demand and stay in the pool once loaded. `EphemeralStore` (for Ephemeral models) is a no-op — it skips both `loadFromDatabase` and `loadFromServer`, since ephemeral models are loaded on-demand and never touch IDB.
+`FullStore` (for Eager models) loads everything at bootstrap. `PartialStore` (for the rest) loads nothing — instances trickle in on demand and stay in the pool once loaded. `EphemeralStore` (for Ephemeral models) is a no-op — it skips both `loadFromDatabase` and `loadFromServer`, since ephemeral models are loaded on-demand and never touch IDB.
 
 This is the key mechanism for keeping the pool small. See `04-lazy-loading.md` for more detail.
 

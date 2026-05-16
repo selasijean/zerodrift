@@ -48,7 +48,7 @@ export class FullStore extends ModelStore {
     await this.database.writeModels(this.modelName, records);
 
     // Only hydrate into memory if this model loads at bootstrap time
-    if (this.meta.loadStrategy === LoadStrategy.Instant) {
+    if (this.meta.loadStrategy === LoadStrategy.Eager) {
       for (const record of records) {
         this.hydrateRecord(record);
       }

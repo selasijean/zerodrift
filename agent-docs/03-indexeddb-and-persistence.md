@@ -72,7 +72,7 @@ Destructive migrations (removing a model entirely) do delete the store and lose 
 `@ClientModel({ schemaVersion: N })` is the per-model "the serialization changed" signal. The engine snapshots every model's `schemaVersion` in `__meta.modelSchemaVersions` whenever it persists meta. On `connect()`, it diffs that snapshot against the live registry and:
 
 - For any model whose version bumped → clears that model's IDB store + partial-index coverage and forces a Full bootstrap so the rows refill against the new shape. Other models' rows are untouched.
-- For any model present in the registry but missing from the snapshot (i.e., added since the last connect) → after partial bootstrap completes, runs a targeted `bootstrapFetcher(Full, { onlyModels: [newName] })` so adopters don't have to bump anything by hand. Non-Instant additions are silently skipped — they load on demand.
+- For any model present in the registry but missing from the snapshot (i.e., added since the last connect) → after partial bootstrap completes, runs a targeted `bootstrapFetcher(Full, { onlyModels: [newName] })` so adopters don't have to bump anything by hand. Non-Eager additions are silently skipped — they load on demand.
 
 Legacy meta with no `modelSchemaVersions` field (first connect after upgrading the engine) trusts the existing data and triggers neither path.
 
@@ -85,12 +85,12 @@ On startup, `db.determineBootstrapType()` reads `__meta` and returns one of thre
 **When:** No `__meta` record exists (first time, or IDB was cleared).
 
 **What happens:**
-1. Hit the server's bootstrap endpoint with `onlyModels: <every Instant model>` — Lazy / Partial / ExplicitlyRequested / Local / Ephemeral are loaded on demand or via SSE and never belong in a full-bootstrap payload
+1. Hit the server's bootstrap endpoint with `onlyModels: <every Eager model>` — Lazy / Partial / LocalOnly / Ephemeral are loaded on demand or via SSE and never belong in a full-bootstrap payload
 2. Write everything to IDB
 3. Hydrate everything into the ObjectPool
 4. Open SSE connection
 
-This is the most expensive path — it's a full round-trip for all Instant data. But it only happens once per device per workspace.
+This is the most expensive path — it's a full round-trip for all Eager data. But it only happens once per device per workspace.
 
 **Two-phase loading for perceived performance:**
 
@@ -101,7 +101,7 @@ Instead of waiting for everything, the engine loads critical models in Phase 1 (
 **When:** `__meta` exists with a `lastSyncId > 0` — there's a usable local cache.
 
 **What happens:**
-1. Load Instant models from IDB (fast, no network)
+1. Load Eager models from IDB (fast, no network)
 2. Hydrate them into the pool → UI can render immediately
 3. Fetch delta from server: "give me everything since `lastSyncId`"
 4. Merge delta into pool and IDB
@@ -116,7 +116,7 @@ This is the most common path after the first visit. It's fast because step 1 is 
 **When:** The device is offline (`lastSyncId > 0` but no network connectivity).
 
 **What happens:**
-1. Load all Instant models from IDB
+1. Load all Eager models from IDB
 2. Hydrate into pool
 3. Skip SSE connection
 4. App runs from cache — reads work, writes queue locally
@@ -145,7 +145,7 @@ Once a transaction reaches `Completed` state (server acknowledged and delta rece
 
 | Data | ObjectPool (RAM) | IndexedDB (disk) |
 |---|---|---|
-| Instant model instances | All of them | All of them |
+| Eager model instances | All of them | All of them |
 | Partial model instances | Only loaded ones | All of them |
 | Pending transactions | Yes (queue) | Yes (for crash recovery) |
 | `lastSyncId` | No | Yes (in `__meta`) |

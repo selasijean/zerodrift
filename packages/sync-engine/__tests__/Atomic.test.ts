@@ -30,13 +30,13 @@ afterEach(async () => {
 });
 
 describe("StoreManager.atomic()", () => {
-  describe("optimisticUpdate (no save)", () => {
+  describe("assign (no save)", () => {
     it("stages without enqueueing a transaction", () => {
       const task = new TestTask();
       task.hydrate({ id: "t1", title: "Old" });
       addToPool(manager, "TestTask", task);
 
-      task.optimisticUpdate({ title: "New" });
+      task.assign({ title: "New" });
 
       expect(task.title).toBe("New");
       expect(task.hasUnsavedChanges).toBe(true);
@@ -55,8 +55,8 @@ describe("StoreManager.atomic()", () => {
       addToPool(manager, "TestProject", project);
 
       await manager.atomic(async () => {
-        task.optimisticUpdate({ title: "New", done: true });
-        project.optimisticUpdate({ title: "Proj2" });
+        task.assign({ title: "New", done: true });
+        project.assign({ title: "Proj2" });
         await Promise.resolve();
       });
 
@@ -76,8 +76,8 @@ describe("StoreManager.atomic()", () => {
 
       const undoDepthBefore = manager.transactionQueue.undoDepth;
       await manager.atomic(async () => {
-        task.optimisticUpdate({ title: "New" });
-        project.optimisticUpdate({ title: "Proj2" });
+        task.assign({ title: "New" });
+        project.assign({ title: "Proj2" });
       });
       expect(manager.transactionQueue.undoDepth).toBe(undoDepthBefore + 1);
     });
@@ -88,7 +88,7 @@ describe("StoreManager.atomic()", () => {
       addToPool(manager, "TestTask", task);
 
       const out = manager.atomic(() => {
-        task.optimisticUpdate({ title: "New" });
+        task.assign({ title: "New" });
         return 42;
       });
       expect(out).toBe(42);
@@ -100,7 +100,7 @@ describe("StoreManager.atomic()", () => {
       addToPool(manager, "TestTask", task);
 
       const out = await manager.atomic(async () => {
-        task.optimisticUpdate({ title: "New" });
+        task.assign({ title: "New" });
         return 42;
       });
       expect(out).toBe(42);
@@ -119,8 +119,8 @@ describe("StoreManager.atomic()", () => {
 
       expect(() =>
         manager.atomic(() => {
-          task.optimisticUpdate({ title: "New" });
-          project.optimisticUpdate({ title: "Proj2" });
+          task.assign({ title: "New" });
+          project.assign({ title: "Proj2" });
           throw new Error("boom");
         }),
       ).toThrow("boom");
@@ -139,7 +139,7 @@ describe("StoreManager.atomic()", () => {
 
       await expect(
         manager.atomic(async () => {
-          task.optimisticUpdate({ title: "New" });
+          task.assign({ title: "New" });
           await Promise.resolve();
           throw new Error("boom");
         }),
@@ -160,7 +160,7 @@ describe("StoreManager.atomic()", () => {
       // Simulate an SSE delta arriving mid-await on a field we're optimistically editing.
       await expect(
         manager.atomic(async () => {
-          task.optimisticUpdate({ title: "Optimistic" });
+          task.assign({ title: "Optimistic" });
           // Optimistic value visible to the user
           expect(task.title).toBe("Optimistic");
           // Server pushes a different value
@@ -182,7 +182,7 @@ describe("StoreManager.atomic()", () => {
 
       await expect(
         manager.atomic(async () => {
-          task.optimisticUpdate({ title: "Same" });
+          task.assign({ title: "Same" });
           // SSE echoes our own value back
           task.hydrate({ title: "Same" });
           expect(task.title).toBe("Same");
@@ -200,7 +200,7 @@ describe("StoreManager.atomic()", () => {
       addToPool(manager, "TestTask", task);
 
       await manager.atomic(async () => {
-        task.optimisticUpdate({ title: "New" });
+        task.assign({ title: "New" });
         // SSE updates a different field
         task.hydrate({ done: true });
         expect(task.done).toBe(true);
@@ -227,11 +227,11 @@ describe("StoreManager.atomic()", () => {
       addToPool(manager, "TestTask", task);
 
       manager.atomic(() => {
-        task.optimisticUpdate({ title: "A" });
+        task.assign({ title: "A" });
       });
       // A second atomic should work — scope was cleared.
       manager.atomic(() => {
-        task.optimisticUpdate({ title: "B" });
+        task.assign({ title: "B" });
       });
       expect(task.title).toBe("B");
     });

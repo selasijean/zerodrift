@@ -147,7 +147,7 @@ export interface EntityFromZodOpts<Z extends z.ZodObject = z.ZodObject>
    * so typos surface at compile time.
    *
    *     entityFromZod(ZodIssue, {
-   *       loadStrategy: LoadStrategy.Instant,
+   *       loadStrategy: LoadStrategy.Eager,
    *       fields: {
    *         teamId:    s.refId("team").nullable().indexed(),  // replace
    *         email:     (b) => b.indexed(),                     // chain

@@ -638,7 +638,7 @@ describe("Reactivity in headless mode", () => {
     project.makeModelObservable();
 
     const notifications: string[] = [];
-    project.tasks.subscribe(() => notifications.push("fired"));
+    project.tasks.watch(() => notifications.push("fired"));
 
     await project.tasks.load();
 
@@ -651,7 +651,7 @@ describe("Reactivity in headless mode", () => {
     project.makeModelObservable();
 
     const notifications: string[] = [];
-    const unsubscribe = project.tasks.subscribe(() =>
+    const unsubscribe = project.tasks.watch(() =>
       notifications.push("fired"),
     );
 

@@ -60,74 +60,71 @@ Gives you the raw `StoreManager` and current `status`. You won't need `sm` often
 
 ## The hook surface
 
-Five public hooks for reading data, plus `useUndoRedo` for the transaction stack. Every reading hook returns the same shape — `{ item | items, isLoading, error, reload }` — so consumer code looks uniform regardless of whether the underlying source is the pool, IDB, or the server.
+Four read hooks, plus `useUndoRedo` for the transaction stack. Every read
+hook takes a **handle** and returns the same `AsyncResource` shape —
+`{ data, isLoading, isLoaded, error, reload }` — so consumer code is uniform
+regardless of whether the source is the pool, IDB, or the server.
 
-| Hook | What it returns | When the loader fires |
+A **handle** is one of:
+
+- a decorator **model class** — `useRecord(Issue, id)`
+- a schema **namespace** — `useRecord(store.issue, id)`
+
+Both resolve to the same registry name; the record type is inferred from
+whichever form you pass. For a namespace handle the index key is constrained
+to the schema's `.indexed()` fields; for a class handle it's `string`.
+
+| Hook | `data` | When the loader fires |
 |---|---|---|
-| `useModel(name, id)` | `{ item, isLoading, error, reload }` | `getOrLoadById` only when the pool is missing the entry. In-pool models render with `isLoading: false` from frame zero. |
-| `useModels(name, ids?)` | `{ items, isLoading, error, reload }` | No `ids` → reactive snapshot of every instance of the type, no loader. With `ids` → `getOrLoadByIds` only when at least one id is missing. Items follow the input `ids` order. |
-| `useIndexedCollection(name, indexKey, value)` | `{ items, isLoading, error, reload }` | `getOrLoadCollection` once per `(name, indexKey, value)` triple, gated by `sm.isCollectionLoaded(...)`. |
-| `useCollection(refCollection)` | `{ items, isLoading, isLoaded, error, reload }` | Wraps a `RefCollection` / `OwnedRefs` you already hold (e.g. `team.issues`). Calls `.load()` on mount if not yet loaded. |
-| `useBackRef(backRef)` | `{ value, isLoading, isLoaded, error, reload }` | Wraps a `BackRef` (e.g. `issue.favorite`). Calls `.load()` on mount if not yet loaded. |
+| `useRecord(handle, id)` | `T \| null` | `getOrLoadById` only when the pool is missing the entry. In-pool models render with `isLoading: false` from frame zero. |
+| `useRecords(handle, ids?)` | `T[]` | No `ids` → reactive snapshot of every instance, no loader. With `ids` → `getOrLoadByIds` only when one is missing. Order follows input `ids`. |
+| `useRecordsByIndex(handle, key, value)` | `T[]` | `value` is a string **or** a `string[]`. `getOrLoadCollection` once per `(name, key, value)`, gated by `sm.isCollectionLoaded(...)`; a `string[]` fans out one load per value in parallel. |
+| `useRelation(relation)` | `T[]` (collection) or `T \| null` (back-ref) | Wraps a `RefCollection` / `OwnedRefs` / `BackRef` you already hold (e.g. `issue.comments`, `issue.favorite`). Calls `.load()` on mount if not loaded. |
 
-`reload()` always re-fires the loader regardless of cache state. Auto-fire on mount is gated, so already-cached data doesn't trigger a redundant IDB scan.
-
-```typescript
-// Pool-first read of a single model; falls back to getOrLoadById on pool miss.
-const { item: issue } = useModel<Issue>("Issue", issueId);
-
-// All Issues in the pool, reactive.
-const { items: issues } = useModels<Issue>("Issue");
-
-// Specific subset by id, in input order, with async backfill for any missing.
-const { items } = useModels<Issue>("Issue", ["i1", "i2"]);
-
-// Query by FK index — useful when you don't hold the parent model.
-const { items } = useIndexedCollection<Issue>("Issue", "teamId", teamId);
-```
-
-`useModels` compares `ids` by content (joined string) so inline literals don't re-trigger. `useIndexedCollection` gates auto-fire on `sm.isCollectionLoaded(...)` so remounts don't re-scan IDB.
-
-### useCollection / useBackRef — wrapping a runtime collection
+`isLoaded` is true once the first resolve settled without error (a pool hit
+counts from frame zero). `reload()` always re-fires regardless of cache
+state; auto-fire on mount is gated so cached data doesn't re-scan IDB.
 
 ```typescript
-const { item: team } = useModel<Team>("Team", teamId);
-const { items, isLoading } = useCollection<Issue>(team?.issues);
+// Decorator-class handle:
+const { data: issue } = useRecord(Issue, issueId);          // Issue | null
+const { data: issues } = useRecords(Issue);                 // Issue[]
+const { data: some } = useRecords(Issue, ["i1", "i2"]);     // subset, input order
+const { data: teamIssues } = useRecordsByIndex(Issue, "teamId", teamId);
+const { data: forTeams } = useRecordsByIndex(Issue, "teamId", [t1, t2]); // any-of
 
-const { item: issue } = useModel<Issue>("Issue", issueId);
-const { value: favorite } = useBackRef<Favorite>(issue?.favorite);
-```
-
-When you already have the parent model, these wrap its `RefCollection` / `OwnedRefs` / `BackRef` directly. The collection is passed by reference, not by name, so TypeScript narrows the element type from the model definition. The runtime collection objects own their loading state, and the inverse-link machinery (see [10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md)) keeps `items` / `value` in sync with the pool — no invalidate / reload needed on delta.
-
-## Schema-first hooks — `useEntity*`
-
-If you author models via [`defineSchema(...)`](11-schema-first-authoring.md), four additional hooks accept the typed `store.<entity>` namespace directly. They infer the record type from the namespace and constrain the index key against the schema's `.indexed()` fields.
-
-```typescript
-import {
-  useEntity,
-  useEntities,
-  useEntitiesByIndex,
-  useEntitiesByIndexValues,
-} from "sync-engine/react";
-
-const { item: issue } = useEntity(store.issue, issueId);
-//        ^? Issue inferred from the schema, including singular relations
+// Schema-namespace handle — same hooks, record type + indexed key inferred:
+const { data: issue2 } = useRecord(store.issue, issueId);
+//        ^? Issue inferred from the schema, incl. singular relations
 //           (issue.team) and reverse collections (team.issues.items).
-const { items: teams } = useEntities(store.team);
-const { items: teamIssues } = useEntitiesByIndex(store.issue, "teamId", teamId);
-//                                                            ^^^^^^^^ autocompletes to
-//                                                                     fields actually
-//                                                                     marked .indexed().
-
-// Multi-value form — issues for any of these teams.
-const { items: myIssues } = useEntitiesByIndexValues(store.issue, "teamId", myTeamIds);
+const { data: teams } = useRecords(store.team);
+const { data: ti } = useRecordsByIndex(store.issue, "teamId", teamId);
+//                                                   ^^^^^^^^ autocompletes to
+//                                                   fields marked .indexed().
 ```
 
-Same return shape and reactivity contract as the string-keyed hooks (`{ item | items, isLoading, error, reload }`). Internally they extract the registry name from the namespace and delegate to `useModel` / `useModels` / `useIndexedCollection`, so the underlying `useSyncExternalStore + pool.subscribe` plumbing is identical — there's no separate runtime path.
+`useRecords` compares `ids` (and `useRecordsByIndex` its values) by content
+so inline literals don't re-trigger.
 
-Both hook families coexist; pick whichever matches your authoring style. Decorator-defined models keep using the string-keyed hooks; schema-first apps pick up `useEntity*` for autocomplete and the typed indexed-key constraint.
+### useRelation — wrapping a runtime collection / back-ref
+
+```typescript
+const { data: issue } = useRecord(store.issue, issueId);
+const { data: comments, isLoading } = useRelation(issue?.comments); // → Comment[]
+const { data: favorite } = useRelation(issue?.favorite);            // → Favorite | null
+```
+
+When you already hold the parent record, `useRelation` wraps its
+`RefCollection` / `OwnedRefs` (→ `data: T[]`) or `BackRef` (→ `data: T | null`)
+directly — passed by reference, so TS narrows the element type from the model
+definition. The runtime collection objects own their loading state, and the
+inverse-link machinery (see [10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md)) keeps `data` in sync with the pool — no invalidate / reload on delta.
+
+> One hook family serves both authoring paths: a decorator class and a
+> `store.<entity>` namespace are interchangeable handles. There is no
+> separate string-keyed family — internally the handle resolves to a
+> registry name and runs the same `useSyncExternalStore + pool.subscribe`
+> plumbing.
 
 ## useUndoRedo
 
@@ -144,7 +141,7 @@ Exposes the undo/redo stack. `canUndo` and `canRedo` are reactive — they updat
 
 ## Reactivity Model
 
-The reactivity chain for a component using `useModels("Issue")`:
+The reactivity chain for a component using `useRecords(Issue)`:
 
 ```
 Delta packet arrives
@@ -164,7 +161,7 @@ React compares new snapshot to previous
   → snapshot same   → no re-render
 ```
 
-The `getSnapshot()` for `useModels` returns `pool.getAll("Issue")` — the same array reference if nothing changed, or a new array if anything was added/removed/updated. React uses referential equality on the snapshot to decide whether to re-render. Components reading `team.issues.items` inside a MobX `observer` are woken by the inverse-link layer above instead.
+The `getSnapshot()` for `useRecords` returns `pool.getAll("Issue")` — the same array reference if nothing changed, or a new array if anything was added/removed/updated. React uses referential equality on the snapshot to decide whether to re-render. Components reading `team.issues.items` inside a MobX `observer` are woken by the inverse-link layer above instead.
 
 ## Writing Data
 
@@ -199,7 +196,7 @@ sm.batch(() => {
 
 ## Phase-Gated Returns
 
-All hooks return empty/null data fields before `status.phase === Ready`. This prevents rendering stale or empty states during bootstrap. `useModels` returns `{ items: [], … }`, `useModel` returns `{ item: null, … }`, and so on — the wrapper shape is always present.
+All hooks return empty/null `data` before `status.phase === Ready`. This prevents rendering stale or empty states during bootstrap. `useRecords` returns `{ data: [], … }`, `useRecord` returns `{ data: null, … }`, and so on — the `AsyncResource` shape is always present.
 
 The `SyncProvider`'s `fallback` prop handles showing a loading state during bootstrap. Once `Ready`, the fallback is replaced with the app tree, and all hooks return live data.
 

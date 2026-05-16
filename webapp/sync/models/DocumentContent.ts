@@ -1,7 +1,7 @@
 import { BaseModel, ClientModel, Property, Reference, LoadStrategy } from "sync-engine";
 import type { Issue } from "./Issue";
 
-@ClientModel({ loadStrategy: LoadStrategy.Partial })
+@ClientModel({ name: "DocumentContent", loadStrategy: LoadStrategy.Partial })
 export class DocumentContent extends BaseModel {
   @Property()
   public content = "";

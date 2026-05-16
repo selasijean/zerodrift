@@ -9,20 +9,19 @@ import {
   type EntityNamespace,
 } from "@sync-engine/schema";
 import {
-  useEntities,
-  useEntitiesByIndex,
-  useEntitiesByIndexValues,
-  useEntity,
+  useRecord,
+  useRecords,
+  useRecordsByIndex,
 } from "../src/react/index";
 
 const reactSchema = defineSchema({
   entities: {
     rxTeam: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: { id: s.id(), name: s.string() },
     }),
     rxIssue: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id: s.id(),
         title: s.string(),
@@ -44,15 +43,15 @@ type Store = ReturnType<typeof createStore<typeof reactSchema>>;
 type IssueNs = Store["rxIssue"];
 type TeamNs = Store["rxTeam"];
 
-describe("useEntity* hook signatures", () => {
+describe("useRecord* hook signatures (namespace handles)", () => {
   it("the schema fixture is well-formed", () => {
     expectTypeOf(reactSchema.entities).toHaveProperty("rxIssue");
     expectTypeOf(reactSchema.entities.rxIssue.fields.teamId.meta.kind).toEqualTypeOf<"refId">();
   });
 
-  it("useEntity infers the record type from the namespace", () => {
-    type R = ReturnType<typeof useEntity<IssueNs>>;
-    expectTypeOf<R["item"]>().toMatchTypeOf<{
+  it("useRecord infers the record type from the namespace", () => {
+    type R = ReturnType<typeof useRecord<IssueNs>>;
+    expectTypeOf<R["data"]>().toMatchTypeOf<{
       id: string;
       title: string;
       teamId: string | null;
@@ -60,50 +59,46 @@ describe("useEntity* hook signatures", () => {
     } | null>();
   });
 
-  it("useEntities infers the array of records", () => {
-    type R = ReturnType<typeof useEntities<TeamNs>>;
-    expectTypeOf<R["items"]>().toMatchTypeOf<
+  it("useRecords infers the array of records", () => {
+    type R = ReturnType<typeof useRecords<TeamNs>>;
+    expectTypeOf<R["data"]>().toMatchTypeOf<
       Array<{ id: string; name: string }>
     >();
   });
 
-  it("useEntitiesByIndex constrains the indexKey to .indexed() fields", () => {
-    type IndexedArg = Parameters<typeof useEntitiesByIndex<IssueNs>>[1];
+  it("useRecordsByIndex constrains the indexKey to .indexed() fields", () => {
+    type IndexedArg = Parameters<typeof useRecordsByIndex<IssueNs>>[1];
     // teamId is the only indexed field on rxIssue
     expectTypeOf<IndexedArg>().toEqualTypeOf<"teamId">();
   });
 
-  it("the namespace generic flows to the items return type", () => {
-    type R = ReturnType<typeof useEntitiesByIndex<IssueNs>>;
-    expectTypeOf<R["items"]>().toMatchTypeOf<
+  it("the namespace generic flows to the data return type", () => {
+    type R = ReturnType<typeof useRecordsByIndex<IssueNs>>;
+    expectTypeOf<R["data"]>().toMatchTypeOf<
       Array<{ id: string; title: string; teamId: string | null }>
     >();
   });
 
-  it("useEntitiesByIndexValues takes a values array and reuses the indexed-key constraint", () => {
-    type IndexedArg = Parameters<typeof useEntitiesByIndexValues<IssueNs>>[1];
-    type ValuesArg = Parameters<typeof useEntitiesByIndexValues<IssueNs>>[2];
-    expectTypeOf<IndexedArg>().toEqualTypeOf<"teamId">();
-    expectTypeOf<ValuesArg>().toEqualTypeOf<readonly string[] | null | undefined>();
-
-    type R = ReturnType<typeof useEntitiesByIndexValues<IssueNs>>;
-    expectTypeOf<R["items"]>().toMatchTypeOf<
-      Array<{ id: string; title: string; teamId: string | null }>
+  it("useRecordsByIndex accepts a single value OR a values array", () => {
+    type ValueArg = Parameters<typeof useRecordsByIndex<IssueNs>>[2];
+    expectTypeOf<ValueArg>().toEqualTypeOf<
+      string | readonly string[] | null | undefined
     >();
   });
 
-  // Tier-0 type assertion: passing an EntityNamespace at all is a positive
-  // type test that the generic's inference works on a real store.<entity> value.
-  it("the typed hooks accept an EntityNamespace argument", () => {
-    type Accepts = (ns: IssueNs) => unknown;
-    expectTypeOf(useEntity).parameter(0).toMatchTypeOf<EntityNamespace<
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      any
-    >>();
-    void (null as unknown as Accepts);
+  // Tier-0 type assertion: instantiating with a real store.<entity> type is a
+  // positive test that namespace handles are accepted and inference works.
+  it("the read hooks accept an EntityNamespace handle", () => {
+    expectTypeOf(useRecord<IssueNs>).parameter(0).toEqualTypeOf<IssueNs>();
+    expectTypeOf(useRecord<IssueNs>)
+      .parameter(0)
+      .toMatchTypeOf<EntityNamespace<
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        any,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        any
+      >>();
   });
 });

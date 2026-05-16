@@ -458,9 +458,11 @@ export class BaseModel {
   // ---------------------------------------------------------------------------
 
   /**
-   * Bulk-assign fields from a plain object without saving.
-   * Changes are tracked in pendingChanges and can be committed
-   * with save() or reverted with discardUnsavedChanges().
+   * Stage a bulk field assignment without committing. Changes land in
+   * `pendingChanges` and stay local until `save()` (or an enclosing
+   * `StoreManager.atomic()` / `store.batch()`) flushes them, or
+   * `discardUnsavedChanges()` rolls them back. This is the staging
+   * primitive behind `store.<entity>.draft(...)`.
    *
    * Only `@Property`, `@EphemeralProperty`, `@Reference` (ID fields), and
    * `@ReferenceArray` fields are written — relationship objects and internals
@@ -480,26 +482,6 @@ export class BaseModel {
         (this as Record<string, unknown>)[key] = value;
       }
     });
-  }
-
-  /** Shorthand for assign() + save(). For new models, hydrates then saves. */
-  update(data: Record<string, unknown>) {
-    if (this.store === null) {
-      this.hydrate(data);
-    } else {
-      this.assign(data);
-    }
-    this.save();
-  }
-
-  /**
-   * Stage field updates without enqueueing a transaction. Identical to
-   * `assign()` — exposes the staging-only flow under a name that pairs
-   * with `StoreManager.atomic()`. Call `save()` (or wrap the edit in
-   * `atomic()`) to commit; `discardUnsavedChanges()` to roll back.
-   */
-  optimisticUpdate(data: Record<string, unknown>) {
-    this.assign(data);
   }
 
   // ---------------------------------------------------------------------------

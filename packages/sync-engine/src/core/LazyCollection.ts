@@ -23,10 +23,10 @@
  *       the back-referenced model is also removed from the pool
  *
  * Usage from React:
- *   const { item: team } = useModel("Team", teamId);
+ *   const { data: team } = useRecord(Team, teamId);
  *   const { items, isLoading, load } = team.issues;  // RefCollection
  *   // or via hook:
- *   const { items, isLoading } = useCollection(team?.issues);
+ *   const { data, isLoading } = useRelation(team?.issues);
  */
 
 import { observable, runInAction, makeObservable } from "mobx";
@@ -198,7 +198,11 @@ export abstract class LazyCollectionBase<T extends BaseModel = BaseModel> {
     return this.items.length;
   }
 
-  subscribe(listener: () => void): () => void {
+  /** Observe set-membership changes (items added / removed / replaced).
+   * Payload-less — re-read `items` inside the listener. Returns an
+   * unsubscribe function. The single subscription verb across the public
+   * surface (`record.watch`, `store.<entity>.watchAll`). */
+  watch(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);

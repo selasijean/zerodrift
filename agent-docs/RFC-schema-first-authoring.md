@@ -44,7 +44,7 @@ import {
 export const schema = defineSchema({
   entities: {
     team: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id: s.id(),
         createdAt: s.date(),
@@ -55,7 +55,7 @@ export const schema = defineSchema({
     }),
 
     issue: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       usedForPartialIndexes: true,
       fields: {
         id: s.id(),
@@ -271,7 +271,7 @@ await db.issue.create({
   teamId: "team-eng",
 });
 
-await db.issue.update("issue-1", { title: "Fix hydration bug" });
+await db.issue.patch("issue-1", { title: "Fix hydration bug" });
 await db.issue.delete("issue-1");
 
 const issues = await db.issue.query({
@@ -398,7 +398,7 @@ The principle: both authoring paths produce the same `ModelRegistry` shape, so t
 
 ```typescript
 // existing decorator model
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ loadStrategy: LoadStrategy.Eager })
 export class User extends BaseModel { ... }
 
 // new schema entity referencing it
@@ -439,7 +439,7 @@ The runtime, IDB layout, sync protocol, and React/headless APIs do not change du
 
 Public `store.<entity>.peek(id)` returns a typed proxy. The proxy must behave equivalently to a decorator-defined `BaseModel` instance for reactive consumers:
 
-- Property reads track observable state (works inside `observer()`, `useModel()`, agent `watch()`).
+- Property reads track observable state (works inside `observer()`, `useRecord()`, agent `watch()`).
 - Singular relation reads (`issue.team`) track pool identity atoms.
 - Reverse collections (`team.issues.load()` / `.items`) remain reactive lazy wrappers.
 - Writes go through the same transaction queue and undo stack.

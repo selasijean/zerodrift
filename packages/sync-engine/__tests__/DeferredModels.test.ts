@@ -8,7 +8,7 @@
  *   4. Records already in IDB (e.g. from SSE) are not wiped before writing
  *   5. lastSyncId is advanced if the server returns a higher value
  *
- * Uses TestNote (LoadStrategy.Instant) as the deferred model fixture —
+ * Uses TestNote (LoadStrategy.Eager) as the deferred model fixture —
  * full bootstrap only ever ships Instant models, so the deferred phase-2
  * list must consist of Instant models too.
  * All tests trigger a Full bootstrap (no pre-existing meta) so that

@@ -1,7 +1,7 @@
 import { BaseModel, ClientModel, Property, EphemeralProperty, LoadStrategy } from "sync-engine";
 import { dateSerializer, dateDeserializer } from "./serializers";
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "User", loadStrategy: LoadStrategy.Eager })
 export class User extends BaseModel {
   @Property({ serializer: dateSerializer, deserializer: dateDeserializer })
   public createdAt: Date = new Date();

@@ -31,7 +31,7 @@ class ModelRegistryImpl {
     if (!this.models.has(name)) {
       this.models.set(name, {
         name,
-        loadStrategy: LoadStrategy.Instant,
+        loadStrategy: LoadStrategy.Eager,
         usedForPartialIndexes: false,
         properties: new Map(),
         actions: new Set(),
@@ -107,13 +107,13 @@ class ModelRegistryImpl {
     return [...this.models.values()];
   }
 
-  /** Names of every Instant-load-strategy model. Lazy / Partial /
-   * ExplicitlyRequested / Local / Ephemeral models are loaded on demand or
+  /** Names of every Eager-load-strategy model. Lazy / Partial /
+   * LocalOnly / Ephemeral models are loaded on demand or
    * via SSE — never via a full-bootstrap payload. */
   instantModelNames(): string[] {
     const out: string[] = [];
     for (const meta of this.models.values()) {
-      if (meta.loadStrategy === LoadStrategy.Instant) {
+      if (meta.loadStrategy === LoadStrategy.Eager) {
         out.push(meta.name);
       }
     }
@@ -121,15 +121,15 @@ class ModelRegistryImpl {
   }
 
   /** Names of models that pre-subscribe to SSE deltas regardless of whether
-   * any rows have been loaded locally — Instant (always fully loaded) and
+   * any rows have been loaded locally — Eager (always fully loaded) and
    * Ephemeral (pool-only, fed by SSE). The catchup URL unions this with the
-   * adapter's `loadedModels` so an Instant model the server happens to have
+   * adapter's `loadedModels` so an Eager model the server happens to have
    * zero rows for in this workspace still receives future inserts. */
   alwaysSubscribedModelNames(): string[] {
     const out: string[] = [];
     for (const meta of this.models.values()) {
       if (
-        meta.loadStrategy === LoadStrategy.Instant ||
+        meta.loadStrategy === LoadStrategy.Eager ||
         meta.loadStrategy === LoadStrategy.Ephemeral
       ) {
         out.push(meta.name);

@@ -234,7 +234,7 @@ export interface StoreManagerConfig<TContext = unknown> {
 
   /**
    * Progressive / on-demand loading. When provided, models with
-   * Partial/Lazy/ExplicitlyRequested load strategies are NOT included
+   * Partial/Lazy load strategies are NOT included
    * in the bootstrap fetch. Instead, the first time a collection is
    * accessed (e.g. issue.comments.load()), this fetcher is called with
    * the scoped query. Results are written to IDB and hydrated into the
@@ -658,10 +658,7 @@ export class StoreManager<TContext = unknown> {
         let store: ModelStore;
         if (meta.loadStrategy === LoadStrategy.Ephemeral) {
           store = new EphemeralStore(meta, this.database, this.objectPool);
-        } else if (
-          meta.loadStrategy === LoadStrategy.Partial ||
-          meta.loadStrategy === LoadStrategy.ExplicitlyRequested
-        ) {
+        } else if (meta.loadStrategy === LoadStrategy.Partial) {
           store = new PartialStore(meta, this.database, this.objectPool);
         } else {
           store = new FullStore(meta, this.database, this.objectPool);
@@ -784,17 +781,17 @@ export class StoreManager<TContext = unknown> {
   }
 
   /**
-   * Full bootstrap — two-phase fetch. Only Instant models are ever shipped;
-   * Lazy / Partial / ExplicitlyRequested / Local / Ephemeral load on demand
+   * Full bootstrap — two-phase fetch. Only Eager models are ever shipped;
+   * Lazy / Partial / LocalOnly / Ephemeral load on demand
    * or via SSE.
    *
-   * Phase 1: critical Instant models (everything NOT in deferredModels).
+   * Phase 1: critical Eager models (everything NOT in deferredModels).
    *          Write to IDB, hydrate into ObjectPool. UI can render.
    *
-   * Phase 2: deferred Instant models (Comment, Reaction, Attachment, etc.)
+   * Phase 2: deferred Eager models (Comment, Reaction, Attachment, etc.)
    *          in the background after the engine is marked ready.
    *
-   * If deferredModels is not configured, every Instant model is fetched in
+   * If deferredModels is not configured, every Eager model is fetched in
    * a single request.
    */
   private async fullBootstrap() {
@@ -802,7 +799,7 @@ export class StoreManager<TContext = unknown> {
     const instantModels = ModelRegistry.instantModelNames();
 
     if (deferred.size > 0) {
-      // Phase 1: critical Instant models only
+      // Phase 1: critical Eager models only
       const criticalModels = instantModels.filter(
         (name) => !deferred.has(name),
       );
@@ -835,8 +832,8 @@ export class StoreManager<TContext = unknown> {
         this.fetchDeferredModels(deferredModels);
       }
     } else {
-      // Single-phase: fetch every Instant model at once. Lazy / Partial /
-      // ExplicitlyRequested / Local / Ephemeral models are loaded on demand
+      // Single-phase: fetch every Eager model at once. Lazy / Partial /
+      // LocalOnly / Ephemeral models are loaded on demand
       // (or never) and don't belong in a bootstrap payload.
       this.setPhase(BootstrapPhase.Fetching, "full");
       const res = await this.config.bootstrapFetcher(BootstrapType.Full, {
@@ -1000,7 +997,7 @@ export class StoreManager<TContext = unknown> {
         .filter(
           ([name]) =>
             ModelRegistry.getModelMeta(name)?.loadStrategy ===
-            LoadStrategy.Instant,
+            LoadStrategy.Eager,
         )
         .map(([, store]) => store.loadFromDatabase()),
     );
@@ -1034,7 +1031,7 @@ export class StoreManager<TContext = unknown> {
     for (const [name, records] of Object.entries(res.models)) {
       await this.database.writeModels(name, records);
       const meta = ModelRegistry.getModelMeta(name);
-      if (meta?.loadStrategy === LoadStrategy.Instant) {
+      if (meta?.loadStrategy === LoadStrategy.Eager) {
         for (const r of records) {
           const existing = this.objectPool.getById(name, r.id as string);
           if (existing != null) {
@@ -1068,7 +1065,7 @@ export class StoreManager<TContext = unknown> {
         .filter(
           ([name]) =>
             ModelRegistry.getModelMeta(name)?.loadStrategy ===
-            LoadStrategy.Instant,
+            LoadStrategy.Eager,
         )
         .map(([, store]) => store.loadFromDatabase()),
     );
@@ -1560,7 +1557,7 @@ export class StoreManager<TContext = unknown> {
 
   /**
    * Scoped bootstrap-fetcher call: same fetcher used by full/partial bootstrap,
-   * scoped to a subset of groups via `syncGroups` and to Instant models only.
+   * scoped to a subset of groups via `syncGroups` and to Eager models only.
    *
    * Returns `schemaMismatch: true` if the server reports a schema version that
    * doesn't match what's stored — in that case a full re-bootstrap has already
@@ -1607,9 +1604,9 @@ export class StoreManager<TContext = unknown> {
   }
 
   /**
-   * Targeted full fetch for Instant models added to the registry since the
+   * Targeted full fetch for Eager models added to the registry since the
    * last connect. Runs after partial bootstrap so existing models keep their
-   * delta-only path; new Instant models get a full snapshot. Non-Instant
+   * delta-only path; new Eager models get a full snapshot. Non-Eager
    * additions are silently dropped — they load on demand or not at all.
    */
   private async fetchNewlyAddedModels(modelNames: string[]): Promise<void> {
@@ -1646,7 +1643,7 @@ export class StoreManager<TContext = unknown> {
   }
 
   /**
-   * Write records for Instant models into the pool. Updates existing instances
+   * Write records for Eager models into the pool. Updates existing instances
    * in-place; creates new ones via hydrateAndPut for models not yet in memory.
    */
   private hydrateInstantModels(
@@ -1654,7 +1651,7 @@ export class StoreManager<TContext = unknown> {
     records: Record<string, unknown>[],
   ): void {
     const meta = ModelRegistry.getModelMeta(modelName);
-    if (meta?.loadStrategy !== LoadStrategy.Instant) {
+    if (meta?.loadStrategy !== LoadStrategy.Eager) {
       return;
     }
     for (const record of records) {
@@ -1805,8 +1802,8 @@ export class StoreManager<TContext = unknown> {
    * Stage optimistic edits with all-or-nothing local commit semantics.
    *
    *   storeManager.atomic(async () => {
-   *     book.optimisticUpdate({ title: "X" });
-   *     issue.optimisticUpdate({ status: "done" });
+   *     book.assign({ title: "X" });
+   *     issue.assign({ status: "done" });
    *     await api.call();
    *   });
    *
@@ -1995,7 +1992,7 @@ export class StoreManager<TContext = unknown> {
         : this.config.onDemandFetcher;
 
     if (
-      meta?.loadStrategy !== LoadStrategy.Instant &&
+      meta?.loadStrategy !== LoadStrategy.Eager &&
       fetchFromServer != null &&
       !this.partialIndexCoverage.has(key) &&
       // Compound coverage only ever exists when the adopter opted into
@@ -2485,9 +2482,9 @@ export class StoreManager<TContext = unknown> {
    * results, and records coverage so subsequent same-scope calls short-circuit.
    *
    * Per-strategy behavior:
-   *   - Instant / Ephemeral — already fully resident; returns pool snapshot.
+   *   - Eager / Ephemeral — already fully resident; returns pool snapshot.
    *   - Local — returns IDB contents (no server hit).
-   *   - Lazy / Partial / ExplicitlyRequested — fetches and hydrates.
+   *   - Lazy / Partial — fetches and hydrates.
    *
    * Coverage is tracked in `partialIndexCoverage` under the
    * `ALL_INDEX_KEY_SENTINEL` reserved indexKey — adopters never see it but it
@@ -2509,7 +2506,7 @@ export class StoreManager<TContext = unknown> {
     const { loadStrategy } = meta;
 
     if (
-      loadStrategy === LoadStrategy.Instant ||
+      loadStrategy === LoadStrategy.Eager ||
       loadStrategy === LoadStrategy.Ephemeral
     ) {
       return this.objectPool.getAll<T>(modelName);
@@ -2524,7 +2521,7 @@ export class StoreManager<TContext = unknown> {
       coverageValue,
     );
 
-    const isLocal = loadStrategy === LoadStrategy.Local;
+    const isLocal = loadStrategy === LoadStrategy.LocalOnly;
     const alreadyCovered =
       isLocal || this.partialIndexCoverage.has(coverageKey);
 

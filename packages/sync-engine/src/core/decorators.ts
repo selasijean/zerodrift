@@ -3,7 +3,7 @@
  *
  * Usage looks like:
  *
- *   @ClientModel({ loadStrategy: LoadStrategy.Instant })
+ *   @ClientModel({ loadStrategy: LoadStrategy.Eager })
  *   class Issue extends BaseModel {
  *     @Property() title = "";
  *     @Reference("User", { nullable: true }) assignee: any;
@@ -128,8 +128,26 @@ function drainPendingChain(ctor: Ctor, meta: ModelMeta): void {
 // Registers the model name, constructor, and load strategy in the registry.
 // ---------------------------------------------------------------------------
 
+// Module-scoped (not global) ambient so the dom-only lib typechecks while
+// keeping the literal `process.env.NODE_ENV` that bundlers statically
+// replace — the warning compiles out of production browser builds.
+declare const process:
+  | { env?: { NODE_ENV?: string } }
+  | undefined;
+
+/** Models registered without an explicit `name`, for the one-shot dev warning. */
+const ctorNameFallbacks = new Set<string>();
+
 export function ClientModel(
   opts: {
+    /**
+     * The registry name — what `ModelMeta.name` becomes, what
+     * cross-references resolve against, and the typed handle for
+     * `useRecord(Model, …)`. Defaults to `ctor.name`, which minifiers
+     * mangle in production: pass an explicit `name` (or configure your
+     * bundler's `keep_classnames`) for any shipped build.
+     */
+    name?: string;
     loadStrategy?: LoadStrategy;
     usedForPartialIndexes?: boolean;
     schemaVersion?: number;
@@ -138,9 +156,24 @@ export function ClientModel(
   // Legacy decorator target — no better type exists for prototype manipulation
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return function <T extends new (...args: any[]) => any>(ctor: T) {
+    const modelName = opts.name ?? ctor.name;
+    if (
+      opts.name == null &&
+      typeof process !== "undefined" &&
+      process.env?.NODE_ENV !== "production" &&
+      !ctorNameFallbacks.has(modelName)
+    ) {
+      ctorNameFallbacks.add(modelName);
+      console.warn(
+        `[sync-engine] @ClientModel on "${modelName}" has no explicit ` +
+          `{ name } and is keyed on ctor.name. Minified production builds ` +
+          `mangle class names — pass @ClientModel({ name: "${modelName}" }) ` +
+          `or set your bundler's keep_classnames.`,
+      );
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (ctor as any)._modelName = ctor.name;
-    const meta = ModelRegistry.registerModel(ctor.name, ctor);
+    (ctor as any)._modelName = modelName;
+    const meta = ModelRegistry.registerModel(modelName, ctor);
     if (opts.loadStrategy != null) {
       meta.loadStrategy = opts.loadStrategy;
     }

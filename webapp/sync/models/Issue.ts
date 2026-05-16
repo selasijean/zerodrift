@@ -10,7 +10,7 @@ import {
 import type { Team } from "./Team";
 import { dateSerializer, dateDeserializer } from "./serializers";
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant, usedForPartialIndexes: true })
+@ClientModel({ name: "Issue", loadStrategy: LoadStrategy.Eager, usedForPartialIndexes: true })
 export class Issue extends BaseModel {
   @Property({ serializer: dateSerializer, deserializer: dateDeserializer })
   public createdAt: Date = new Date();

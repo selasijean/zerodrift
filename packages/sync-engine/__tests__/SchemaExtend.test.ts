@@ -17,7 +17,7 @@ import { reaction } from "mobx";
 const extSchema = defineSchema({
   entities: {
     extTeam: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id: s.id(),
         key: s.string(),
@@ -25,7 +25,7 @@ const extSchema = defineSchema({
       },
     }),
     extIssue: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id: s.id(),
         title: s.string().default(""),
@@ -155,7 +155,7 @@ describe("extend — computed", () => {
       { fireImmediately: true },
     );
 
-    db.extIssue.update("issue-react", { sortOrder: 42 });
+    db.extIssue.patch("issue-react", { sortOrder: 42 });
 
     // computed = `${teamId.slice(0, 4)}-${sortOrder}` → "team-1" then "team-42"
     expect(seen).toContain("team-1");

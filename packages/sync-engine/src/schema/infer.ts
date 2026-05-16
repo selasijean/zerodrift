@@ -47,9 +47,10 @@ export interface RelationCollection<T> {
   /**
    * Fires whenever the collection's items list changes (records added,
    * removed, or replaced). Payload-less — re-read `items` inside `cb`.
-   * Returns an unsubscribe function.
+   * Returns an unsubscribe function. Same verb as `record.watch` /
+   * `store.<entity>.watchAll`.
    */
-  subscribe(cb: () => void): () => void;
+  watch(cb: () => void): () => void;
 }
 
 type EntityFieldTypes<S extends SchemaDef, K extends EntityKey<S>> = {

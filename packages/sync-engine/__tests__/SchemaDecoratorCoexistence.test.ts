@@ -17,7 +17,7 @@ import { StoreManager } from "@sync-engine/StoreManager";
 
 // ── decorator-defined model ────────────────────────────────────────────────
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "CoexUser", loadStrategy: LoadStrategy.Eager })
 class CoexUser extends BaseModel {
   @Property()
   declare email: string;
@@ -37,13 +37,13 @@ const coexSchema = defineSchema({
       // entities can reference it via s.refId / link.
       external: true,
       name: "CoexUser",
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id: s.id(),
       },
     }),
     coexComment: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id: s.id(),
         body: s.string(),
@@ -160,14 +160,14 @@ describe("schema → decorator FK resolution", () => {
       body: "doomed",
       authorId: "user-cascade",
     });
-    expect(db.coexComment.peek("comment-cascade")).not.toBeNull();
+    expect(db.coexComment.peek("comment-cascade")).toBeDefined();
 
     // Delete the decorator parent through the StoreManager (bypassing db.*
     // since coexUser is external — the schema typed surface doesn't expose it).
     sm.deleteModel(user);
 
     // onDelete: "cascade" should propagate to the schema-defined comment.
-    expect(db.coexComment.peek("comment-cascade")).toBeNull();
+    expect(db.coexComment.peek("comment-cascade")).toBeUndefined();
   });
 });
 
@@ -183,7 +183,7 @@ describe("external entity validation", () => {
           entities: {
             externOrphan: entity({
               external: true,
-              loadStrategy: LoadStrategy.Instant,
+              loadStrategy: LoadStrategy.Eager,
               fields: { id: s.id() },
             }),
           },
@@ -201,7 +201,7 @@ describe("external entity validation", () => {
             missingExtern: entity({
               external: true,
               name: "DoesNotExist",
-              loadStrategy: LoadStrategy.Instant,
+              loadStrategy: LoadStrategy.Eager,
               fields: { id: s.id() },
             }),
           },
