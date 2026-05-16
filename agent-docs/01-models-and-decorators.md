@@ -206,7 +206,7 @@ Wraps the getter in MobX `computed()`. The value is memoized and only re-evaluat
 
 - **`model.discardUnsavedChanges()`** — drop staged changes, reset to the last-saved values.
 
-> The schema-first surface wraps these as `store.<entity>.create / patch / draft / delete / archive` — see [11-schema-first-authoring.md](11-schema-first-authoring.md). `BaseModel.update(data)` and `optimisticUpdate(data)` were removed in the API consolidation (see [RFC-api-consolidation.md](RFC-api-consolidation.md)); use `assign` + `save`, or the schema verbs.
+> The schema-first surface wraps these as `store.<entity>.create / patch / draft / delete / archive` — see [11-schema-first-authoring.md](11-schema-first-authoring.md). `BaseModel.update(data)` and `optimisticUpdate(data)` were removed in the API consolidation; use `assign` + `save`, or the schema verbs.
 
 The optimistic flow lets you stage a multi-step user action and commit-or-discard at the boundary:
 
