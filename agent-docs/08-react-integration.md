@@ -122,11 +122,10 @@ directly — passed by reference, so TS narrows the element type from the model
 definition. The runtime collection objects own their loading state, and the
 inverse-link machinery (see [10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md)) keeps `data` in sync with the pool — no invalidate / reload on delta.
 
-> One hook family serves both authoring paths: a decorator class and a
-> `store.<entity>` namespace are interchangeable handles. There is no
-> separate string-keyed family — internally the handle resolves to a
-> registry name and runs the same `useSyncExternalStore + pool.subscribe`
-> plumbing.
+> A decorator class and a `store.<entity>` namespace are interchangeable
+> handles for the same four hooks — both resolve to a registry name and
+> share one `useSyncExternalStore + pool.subscribe` path, so there's no
+> runtime difference between them.
 
 ## useUndoRedo
 
