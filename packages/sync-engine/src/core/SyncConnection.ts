@@ -157,7 +157,7 @@ export class SyncConnection extends BaseSSEConnection {
     const lastSyncId = meta?.lastSyncId ?? 0;
     const syncGroups = encodeCsvList(meta?.subscribedSyncGroups ?? []);
     // Tell the server which models we're subscribed to (catchup + live
-    // stream; absent → no filter). Union of always-subscribed (Instant +
+    // stream; absent → no filter). Union of always-subscribed (Eager +
     // Ephemeral, see ModelRegistry) with adapter-tracked loadedModels.
     // Sort for a stable URL — equivalent sets must produce identical URLs
     // so the engine doesn't churn reconnects when iteration order shifts.
@@ -390,7 +390,7 @@ export class SyncConnection extends BaseSSEConnection {
   // =========================================================================
   // On-demand hydration guard
   //
-  // For non-Instant models, SSE inserts should only enter the pool if the
+  // For non-Eager models, SSE inserts should only enter the pool if the
   // relevant collection has already been loaded this session. Otherwise the
   // insert is written to IDB (step 4) and will be picked up the next time
   // getOrLoadCollection is called for that parent.
@@ -405,14 +405,14 @@ export class SyncConnection extends BaseSSEConnection {
       return true;
     }
 
-    // Instant models always go into the pool — they were bootstrapped in full
-    if (modelMeta.loadStrategy === LoadStrategy.Instant) {
+    // Eager models always go into the pool — they were bootstrapped in full
+    if (modelMeta.loadStrategy === LoadStrategy.Eager) {
       return true;
     }
 
     // `getOrLoadAll` recorded "we want every instance of this model" via a
     // sentinel coverage entry. SSE inserts must land in the pool too,
-    // otherwise observers reading via `useModels(modelName)` miss the row
+    // otherwise observers reading via `useRecords(Model)` miss the row
     // until the next explicit `getOrLoadAll` call refreshes from IDB.
     if (this.isModelFullyLoaded?.(modelMeta.name) === true) {
       return true;

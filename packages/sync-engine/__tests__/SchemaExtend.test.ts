@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import {
   createStore,
   defineSchema,
@@ -17,7 +18,7 @@ import { reaction } from "mobx";
 const extSchema = defineSchema({
   entities: {
     extTeam: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id: s.id(),
         key: s.string(),
@@ -25,7 +26,7 @@ const extSchema = defineSchema({
       },
     }),
     extIssue: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id: s.id(),
         title: s.string().default(""),
@@ -73,7 +74,7 @@ let db: ReturnType<
 
 beforeEach(async () => {
   BaseModel.storeManager = null;
-  sm = new StoreManager({
+  sm = makeStoreManager({
     workspaceId: crypto.randomUUID(),
     storageAdapter: new MemoryAdapter(),
     bootstrapFetcher: vi.fn().mockResolvedValue({
@@ -155,7 +156,7 @@ describe("extend — computed", () => {
       { fireImmediately: true },
     );
 
-    db.extIssue.update("issue-react", { sortOrder: 42 });
+    db.extIssue.patch("issue-react", { sortOrder: 42 });
 
     // computed = `${teamId.slice(0, 4)}-${sortOrder}` → "team-1" then "team-42"
     expect(seen).toContain("team-1");

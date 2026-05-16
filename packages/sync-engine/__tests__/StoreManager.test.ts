@@ -7,10 +7,13 @@ import {
   vi,
   type MockedFunction,
 } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import {
   StoreManager,
   RestrictDeleteError,
   type BootstrapResponse,
+  type OnDemandFetcher,
+  type OnDemandBatchFetcher,
 } from "@sync-engine/StoreManager";
 import { BootstrapPhase, PropertyType } from "@sync-engine/types";
 import {
@@ -33,7 +36,7 @@ const emptyBootstrapResponse: BootstrapResponse = {
 let manager: StoreManager;
 
 beforeEach(async () => {
-  manager = new StoreManager({
+  manager = makeStoreManager({
     workspaceId: crypto.randomUUID(),
     bootstrapFetcher: vi.fn(),
   });
@@ -251,17 +254,12 @@ describe("StoreManager", () => {
   // ── getOrLoadCollection — onDemandFetcher ──────────────────────────────────────
 
   describe("getOrLoadCollection() with onDemandFetcher", () => {
-    type OnDemandFetcher = (
-      modelName: string,
-      indexKey: string,
-      value: string,
-    ) => Promise<Record<string, unknown>[]>;
     let onDemandFetcher: MockedFunction<OnDemandFetcher>;
     let managerWithFetcher: StoreManager;
 
     beforeEach(async () => {
       onDemandFetcher = vi.fn().mockResolvedValue([]);
-      managerWithFetcher = new StoreManager({
+      managerWithFetcher = makeStoreManager({
         workspaceId: crypto.randomUUID(),
         bootstrapFetcher: vi.fn(),
         onDemandFetcher,
@@ -419,17 +417,12 @@ describe("StoreManager", () => {
   // ── getOrLoadById — onDemandFetcher ─────────────────────────────────────────────
 
   describe("getOrLoadById() with onDemandFetcher", () => {
-    type OnDemandFetcher = (
-      modelName: string,
-      indexKey: string,
-      value: string,
-    ) => Promise<Record<string, unknown>[]>;
     let onDemandFetcher: MockedFunction<OnDemandFetcher>;
     let managerWithFetcher: StoreManager;
 
     beforeEach(async () => {
       onDemandFetcher = vi.fn().mockResolvedValue([]);
-      managerWithFetcher = new StoreManager({
+      managerWithFetcher = makeStoreManager({
         workspaceId: crypto.randomUUID(),
         bootstrapFetcher: vi.fn(),
         onDemandFetcher,
@@ -553,16 +546,12 @@ describe("StoreManager", () => {
   // ── getOrLoadByIds — onDemandBatchFetcher ─────────────────────────────────────
 
   describe("getOrLoadByIds() with onDemandBatchFetcher", () => {
-    type OnDemandBatchFetcher = (
-      modelName: string,
-      ids: string[],
-    ) => Promise<Record<string, unknown>[]>;
     let onDemandBatchFetcher: MockedFunction<OnDemandBatchFetcher>;
     let managerWithFetcher: StoreManager;
 
     beforeEach(async () => {
       onDemandBatchFetcher = vi.fn().mockResolvedValue([]);
-      managerWithFetcher = new StoreManager({
+      managerWithFetcher = makeStoreManager({
         workspaceId: crypto.randomUUID(),
         bootstrapFetcher: vi.fn(),
         onDemandBatchFetcher,
@@ -706,17 +695,12 @@ describe("StoreManager", () => {
   // ── getOrLoadByIds — fallback to onDemandFetcher ───────────────────────────────
 
   describe("getOrLoadByIds() fallback to onDemandFetcher", () => {
-    type OnDemandFetcher = (
-      modelName: string,
-      indexKey: string,
-      value: string,
-    ) => Promise<Record<string, unknown>[]>;
     let onDemandFetcher: MockedFunction<OnDemandFetcher>;
     let managerWithFetcher: StoreManager;
 
     beforeEach(async () => {
       onDemandFetcher = vi.fn().mockResolvedValue([]);
-      managerWithFetcher = new StoreManager({
+      managerWithFetcher = makeStoreManager({
         workspaceId: crypto.randomUUID(),
         bootstrapFetcher: vi.fn(),
         onDemandFetcher,
@@ -870,17 +854,12 @@ describe("StoreManager", () => {
   // ── Refresh APIs ───────────────────────────────────────────────────────────
 
   describe("refreshCollection()", () => {
-    type OnDemandFetcher = (
-      modelName: string,
-      indexKey: string,
-      value: string,
-    ) => Promise<Record<string, unknown>[]>;
     let onDemandFetcher: MockedFunction<OnDemandFetcher>;
     let sm: StoreManager;
 
     beforeEach(async () => {
       onDemandFetcher = vi.fn().mockResolvedValue([]);
-      sm = new StoreManager({
+      sm = makeStoreManager({
         workspaceId: crypto.randomUUID(),
         bootstrapFetcher: vi.fn(),
         onDemandFetcher,
@@ -964,10 +943,6 @@ describe("StoreManager", () => {
   });
 
   describe("refreshModels()", () => {
-    type OnDemandBatchFetcher = (
-      modelName: string,
-      ids: string[],
-    ) => Promise<Record<string, unknown>[]>;
     let onDemandFetcher: MockedFunction<
       (m: string, k: string, v: string) => Promise<Record<string, unknown>[]>
     >;
@@ -977,7 +952,7 @@ describe("StoreManager", () => {
     beforeEach(async () => {
       onDemandFetcher = vi.fn().mockResolvedValue([]);
       onDemandBatchFetcher = vi.fn().mockResolvedValue([]);
-      sm = new StoreManager({
+      sm = makeStoreManager({
         workspaceId: crypto.randomUUID(),
         bootstrapFetcher: vi.fn(),
         onDemandFetcher,
@@ -1038,17 +1013,12 @@ describe("StoreManager", () => {
   });
 
   describe("refreshAllOfModel()", () => {
-    type OnDemandFetcher = (
-      modelName: string,
-      indexKey: string,
-      value: string,
-    ) => Promise<Record<string, unknown>[]>;
     let onDemandFetcher: MockedFunction<OnDemandFetcher>;
     let sm: StoreManager;
 
     beforeEach(async () => {
       onDemandFetcher = vi.fn().mockResolvedValue([]);
-      sm = new StoreManager({
+      sm = makeStoreManager({
         workspaceId: crypto.randomUUID(),
         bootstrapFetcher: vi.fn(),
         onDemandFetcher,
@@ -1095,7 +1065,7 @@ describe("StoreManager", () => {
       const onDemandBatchFetcher = vi.fn().mockResolvedValue([]);
 
       // Create a StoreManager with both fetchers
-      const smWithBatch = new StoreManager({
+      const smWithBatch = makeStoreManager({
         workspaceId: crypto.randomUUID(),
         bootstrapFetcher: vi.fn(),
         onDemandFetcher,
@@ -1170,7 +1140,7 @@ describe("StoreManager", () => {
       const bootstrapFetcher = vi
         .fn()
         .mockResolvedValue(emptyBootstrapResponse);
-      const sm = new StoreManager({
+      const sm = makeStoreManager({
         workspaceId: crypto.randomUUID(),
         bootstrapFetcher,
       });
@@ -1191,7 +1161,7 @@ describe("StoreManager", () => {
       const bootstrapFetcher = vi
         .fn()
         .mockResolvedValue(emptyBootstrapResponse);
-      const sm = new StoreManager({
+      const sm = makeStoreManager({
         workspaceId: crypto.randomUUID(),
         bootstrapFetcher,
         // deferredModels is the user's explicit phase-2 list — its members
@@ -1224,7 +1194,7 @@ describe("StoreManager", () => {
       let resolveFetcher!: (v: BootstrapResponse) => void;
       let phase: BootstrapPhase = BootstrapPhase.Idle;
 
-      const sm = new StoreManager({
+      const sm = makeStoreManager({
         workspaceId: crypto.randomUUID(),
         bootstrapFetcher: () =>
           new Promise<BootstrapResponse>((r) => {
@@ -1259,7 +1229,7 @@ describe("StoreManager", () => {
       const client = controllableSSEClient();
       const factory = vi.fn(makeFactory(client));
 
-      const sm = new StoreManager({
+      const sm = makeStoreManager({
         workspaceId: crypto.randomUUID(),
         bootstrapFetcher: vi.fn().mockResolvedValue(emptyBootstrapResponse),
         syncUrl: "http://localhost/sync",
@@ -1282,7 +1252,7 @@ describe("StoreManager", () => {
 
       let resolveFirst!: (v: BootstrapResponse) => void;
       let phase1: BootstrapPhase = BootstrapPhase.Idle;
-      const sm1 = new StoreManager({
+      const sm1 = makeStoreManager({
         workspaceId,
         bootstrapFetcher: () =>
           new Promise<BootstrapResponse>((r) => {
@@ -1302,7 +1272,7 @@ describe("StoreManager", () => {
       resolveFirst(emptyBootstrapResponse);
       await new Promise((r) => setTimeout(r, 0));
 
-      const sm2 = new StoreManager({
+      const sm2 = makeStoreManager({
         workspaceId,
         bootstrapFetcher: vi.fn().mockResolvedValue(emptyBootstrapResponse),
         syncUrl: "http://localhost/sync",
@@ -1331,7 +1301,7 @@ describe("StoreManager", () => {
         (meta, ctx: Ctx | undefined) =>
           `${ctx?.tenantId ?? "anon"}:${meta.name}:fixed`,
       );
-      const sm = new StoreManager<Ctx>({
+      const sm = makeStoreManager<Ctx>({
         workspaceId: "ws",
         bootstrapFetcher: vi.fn(),
         identifierFn: fn,
@@ -1353,7 +1323,7 @@ describe("StoreManager", () => {
       const fn = vi.fn(
         (_meta, ctx: Ctx | undefined) => `${ctx?.user ?? "none"}-id`,
       );
-      const sm = new StoreManager<Ctx>({
+      const sm = makeStoreManager<Ctx>({
         workspaceId: "ws",
         bootstrapFetcher: vi.fn(),
         identifierFn: fn,
@@ -1372,7 +1342,7 @@ describe("StoreManager", () => {
 
     it("falls back to crypto.randomUUID() when the model isn't registered", () => {
       const fn = vi.fn(() => "should-not-be-called");
-      const sm = new StoreManager({
+      const sm = makeStoreManager({
         workspaceId: "ws",
         bootstrapFetcher: vi.fn(),
         identifierFn: fn,
@@ -1405,7 +1375,7 @@ describe("StoreManager", () => {
                 : value
           : undefined,
       );
-      const sm = new StoreManager({
+      const sm = makeStoreManager({
         workspaceId: "ws",
         bootstrapFetcher: vi.fn(),
         applyFieldTransforms: rule,
@@ -1421,7 +1391,7 @@ describe("StoreManager", () => {
     });
 
     it("applyTransform leaves values for unmatched properties unchanged", () => {
-      const sm = new StoreManager({
+      const sm = makeStoreManager({
         workspaceId: "ws",
         bootstrapFetcher: vi.fn(),
         applyFieldTransforms: (_meta, prop) =>
@@ -1436,7 +1406,7 @@ describe("StoreManager", () => {
     });
 
     it("rewrites assigned values through the property setter", () => {
-      const sm = new StoreManager({
+      const sm = makeStoreManager({
         workspaceId: "ws",
         bootstrapFetcher: vi.fn(),
         applyFieldTransforms: (_meta, prop) =>
@@ -1469,7 +1439,7 @@ describe("StoreManager", () => {
       type Ctx = { tenant: string };
       const seen: Array<{ value: unknown; instance: unknown; ctx: unknown }> =
         [];
-      const sm = new StoreManager<Ctx>({
+      const sm = makeStoreManager<Ctx>({
         workspaceId: "ws",
         bootstrapFetcher: vi.fn(),
         applyFieldTransforms: (_meta, prop) =>

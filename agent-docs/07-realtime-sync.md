@@ -10,7 +10,7 @@ SSE is a long-lived HTTP connection where the server pushes line-delimited text 
 
 ```typescript
 connect() {
-  // Always-subscribed (Instant + Ephemeral) ∪ models the adapter has rows for.
+  // Always-subscribed (Eager + Ephemeral) ∪ models the adapter has rows for.
   const subscribed = [...new Set([
     ...ModelRegistry.alwaysSubscribedModelNames(),
     ...db.loadedModels,
@@ -44,7 +44,7 @@ Three things worth noting:
 
 2. **Manual reconnect on error.** The browser's built-in SSE reconnect reuses the original URL — stale `lastSyncId`. The engine closes and re-opens with a fresh URL read from `__meta`, which has the latest `lastSyncId` from the most recently processed packet.
 
-3. **`onlyModels` filter.** The `StorageAdapter` tracks which models have at least one row locally — seeded on `connect()` and grown by `writeModels` / `clearModelStore`. The catchup URL sends the union of that set with `ModelRegistry.alwaysSubscribedModelNames()` (Instant + Ephemeral, which pre-subscribe even when the workspace happens to have zero rows for them) so the server skips deltas (catchup *and* live stream) only for models the client neither pre-subscribes to nor has touched. When the set transitions mid-session (first `getOrLoadCollection` for a Partial model, or a schema-migration clear), `StoreManager` debounces a reconnect via `setTimeout(0)` so consecutive awaited writes coalesce into one round-trip. If both sets are empty, the param is omitted and the server sends everything.
+3. **`onlyModels` filter.** The `StorageAdapter` tracks which models have at least one row locally — seeded on `connect()` and grown by `writeModels` / `clearModelStore`. The catchup URL sends the union of that set with `ModelRegistry.alwaysSubscribedModelNames()` (Eager + Ephemeral, which pre-subscribe even when the workspace happens to have zero rows for them) so the server skips deltas (catchup *and* live stream) only for models the client neither pre-subscribes to nor has touched. When the set transitions mid-session (first `getOrLoadCollection` for a Partial model, or a schema-migration clear), `StoreManager` debounces a reconnect via `setTimeout(0)` so consecutive awaited writes coalesce into one round-trip. If both sets are empty, the param is omitted and the server sends everything.
 
 ## Delta Packets
 
@@ -206,17 +206,20 @@ Both `SyncConnection` and `ModelStream` extend `BaseSSEConnection`, which provid
 
 ```typescript
 const sm = new StoreManager({
-  // ...
-  modelStreams: [
-    {
-      url: "http://calc-engine/events",
-      onStatusChange: (connected) => {
-        if (!connected) {
-          sm.refreshAllOfModel("Metric");
-        }
+  workspaceId,
+  transport: {
+    bootstrapFetcher,
+    modelStreams: [
+      {
+        url: "http://calc-engine/events",
+        onStatusChange: (connected) => {
+          if (!connected) {
+            sm.refreshAllOfModel("Metric");
+          }
+        },
       },
-    },
-  ],
+    ],
+  },
 });
 ```
 

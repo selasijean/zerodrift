@@ -1,10 +1,32 @@
-// Types & enums
-export * from "./types";
+// `sync-engine` — the curated, stable adopter surface. The engine's runtime
+// machinery lives behind `sync-engine/internal` (see internal.ts).
+
+// ── Enums & serializers ────────────────────────────────────────────────────
+export {
+  LoadStrategy,
+  PropertyType,
+  BootstrapPhase,
+  TransactionState,
+} from "./types";
 export { dateSerializer, dateDeserializer } from "./serializers";
 
-// Model definition
-export { ModelRegistry } from "./ModelRegistry";
-export { defineObservableProperty } from "./observability";
+// ── Adopter-facing types ───────────────────────────────────────────────────
+// Referenced by the public config / decorator / commit-routing surface.
+export type {
+  PropertyMeta,
+  ModelMeta,
+  FieldTransform,
+  PropertyChange,
+  CommitIntent,
+  CommitRouteResult,
+  CommitRouteHandler,
+  OnModelTouchedHandler,
+  OnDelete,
+  EngineErrorContext,
+  EngineErrorHandler,
+} from "./types";
+
+// ── Model definition ───────────────────────────────────────────────────────
 export {
   ClientModel,
   Property,
@@ -22,34 +44,38 @@ export {
 } from "./decorators";
 export { BaseModel } from "./BaseModel";
 
-// Bootstrapping
-export { ObjectPool } from "./ObjectPool";
-export { Database, BootstrapType } from "./Database";
-export type { DatabaseMeta, StorageAdapter } from "./Database";
+// Relation field types — adopters annotate model fields with these
+// (`public issues: RefCollection<Issue>`), so they stay on the curated
+// surface even though their construction is engine-internal.
+export { RefCollection, BackRef, CollectionState } from "./LazyCollection";
+export { OwnedRefs } from "./LazyOwnedCollection";
+
+// ── Storage ────────────────────────────────────────────────────────────────
 export { MemoryAdapter } from "./MemoryAdapter";
-export { FullStore, PartialStore, ModelStore } from "./Store";
+export { BootstrapType } from "./Database";
+export type { DatabaseMeta, StorageAdapter } from "./Database";
+
+// ── Engine ─────────────────────────────────────────────────────────────────
 export { StoreManager, RestrictDeleteError } from "./StoreManager";
 export type {
   BootstrapResponse,
   BootstrapFetcher,
   BootstrapFetcherOptions,
+  FetcherContext,
   StoreManagerConfig,
+  TransportConfig,
+  LoadingConfig,
+  PersistenceConfig,
+  HooksConfig,
+  AdvancedConfig,
+  OnDemandConfig,
+  OnDemandFetcher,
+  OnDemandBatchFetcher,
+  ModelStreamConfig,
 } from "./StoreManager";
 
-// Collection runtime objects
-export { RefCollection, BackRef, CollectionState } from "./LazyCollection";
-export { OwnedRefs } from "./LazyOwnedCollection";
-
-// Transactions
-export {
-  BaseTransaction,
-  UpdateTransaction,
-  CreateTransaction,
-  DeleteTransaction,
-  ArchiveTransaction,
-} from "./Transaction";
+// ── Transactions & undo (config / runUndoable surface) ─────────────────────
 export type { UndoableAction } from "./Transaction";
-export { TransactionQueue } from "./TransactionQueue";
 export type {
   TransactionSender,
   BatchResponse,
@@ -57,12 +83,10 @@ export type {
   UndoResult,
 } from "./TransactionQueue";
 
-// Sync
-export { SyncConnection } from "./SyncConnection";
+// ── Sync (config: syncTransform / modelStreams) ────────────────────────────
 export type {
   SyncAction,
   DeltaPacket,
   SyncMessageTransform,
 } from "./SyncConnection";
-export { ModelStream } from "./ModelStream";
 export type { ModelUpdate, ModelStreamMessageTransform } from "./ModelStream";

@@ -9,8 +9,8 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import { MemoryAdapter } from "@sync-engine/MemoryAdapter";
-import { StoreManager } from "@sync-engine/StoreManager";
 import { BaseModel } from "@sync-engine/BaseModel";
 import { makeSyncConnection } from "./helpers/makeSyncConnection";
 import { ObjectPool } from "@sync-engine/ObjectPool";
@@ -241,7 +241,7 @@ describe("StoreManager — reconnect on loaded-models change", () => {
     });
 
     const { factory, calls } = recordingFactory();
-    const manager = new StoreManager({
+    const manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 100,

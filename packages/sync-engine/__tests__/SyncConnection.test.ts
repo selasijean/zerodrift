@@ -676,7 +676,7 @@ describe("SyncConnection", () => {
       // `getOrLoadAll(TestActivity)` records `*`-coverage. Per-FK
       // `isCollectionLoaded` doesn't see that, so without the
       // `isModelFullyLoaded` callback the new comment would land in IDB
-      // only — observers via `useModels(TestActivity)` would miss it.
+      // only — observers via `useRecords(TestActivity)` would miss it.
       const fullyLoaded = new Set<string>(["TestActivity"]);
       const connWithFullCheck = makeSyncConnection({
         db,

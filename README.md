@@ -33,9 +33,10 @@ If you use decorators, import `reflect-metadata` once before model classes are l
 
 | Import | Use it for |
 |---|---|
-| `sync-engine` | `StoreManager`, `BaseModel`, decorators, `ObjectPool`, storage adapters, and core types. |
+| `sync-engine` | `StoreManager`, `BaseModel`, decorators, `MemoryAdapter`, relation field types (`RefCollection`/`BackRef`/`OwnedRefs`), and the config / error / sync types. The curated, stable surface. |
 | `sync-engine/schema` | `defineSchema`, `entityFromZod`, field builders, links, extensions, and typed `store.<entity>.*` APIs. |
-| `sync-engine/react` | `<SyncProvider>` and React hooks such as `useModel`, `useModels`, `useCollection`, `useUndoRedo`, and schema-typed hook variants. |
+| `sync-engine/react` | `<SyncProvider>` and React hooks: `useRecord`, `useRecords`, `useRecordsByIndex`, `useRelation`, `useBatch`, `useUndoRedo`. |
+| `sync-engine/internal` | Engine machinery (`ObjectPool`, `TransactionQueue`, `SyncConnection`, `ModelRegistry`, …) for tooling/tests. **No stability promise** — may change between releases. |
 
 ## Define your models
 
@@ -52,7 +53,7 @@ import {
 } from "sync-engine";
 import type { RefCollection } from "sync-engine";
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "Team", loadStrategy: LoadStrategy.Eager })
 export class Team extends BaseModel {
   @Property() public name = "";
 
@@ -60,7 +61,7 @@ export class Team extends BaseModel {
   public issues: RefCollection<Issue>;
 }
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "Issue", loadStrategy: LoadStrategy.Eager })
 export class Issue extends BaseModel {
   @Property() public title = "";
   @Property() public priority = 0;
@@ -73,7 +74,7 @@ export class Issue extends BaseModel {
 }
 ```
 
-`@Property` fields are persisted and observable. `@Reference`, `@ReferenceCollection`, `@OwnedCollection`, and `@BackReference` describe relationships; `Lazy*` variants load on demand. `loadStrategy` controls whether a model loads during bootstrap or only when requested.
+`@Property` fields are persisted and observable. `@Reference`, `@ReferenceCollection`, `@OwnedCollection`, and `@BackReference` describe relationships; `Lazy*` variants load on demand. `loadStrategy` controls whether a model loads during bootstrap or only when requested. Pass an explicit `@ClientModel({ name })` — it's the registry key and the `useRecord(Model, …)` handle; without it the class name is used, which minifiers mangle in production.
 
 See [agent-docs/01-models-and-decorators.md](agent-docs/01-models-and-decorators.md) for the full decorator reference.
 
@@ -108,11 +109,11 @@ export const schema = defineSchema({
   entities: {
     team: entityFromZod(TeamRecord, {
       name: "Team",
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
     }),
     issue: entityFromZod(IssueRecord, {
       name: "Issue",
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         teamId: s.refId("team").nullable().indexed(),
       },
@@ -131,8 +132,15 @@ const store = createStore({ schema, storeManager: sm });
 
 const issue = await store.issue.get(issueId);
 const teamIssues = await store.issue.getByIndex("teamId", teamId);
+
+// create / patch commit at the current boundary — no separate save():
 const newIssue = store.issue.create({ title: "Fix hydration", teamId });
-newIssue.save();
+store.issue.patch(issue.id, { priority: 1 });
+
+// draft() is the staged path — mutate, then save() or discardUnsavedChanges():
+const d = store.issue.draft({ title: "" });
+d.title = "Write tests";
+d.save();
 ```
 
 Both authoring paths compile to the same registry, so schema entities and decorator classes can coexist. See [agent-docs/11-schema-first-authoring.md](agent-docs/11-schema-first-authoring.md) for extensions, typed subscriptions, Zod override forms, and coexistence details.
@@ -151,19 +159,22 @@ export default function Providers({ children }) {
     <SyncProvider
       config={{
         workspaceId: "workspace-123",
-        bootstrapFetcher: async (type, sinceSyncId) => {
-          const res = await fetch(`/api/bootstrap?type=${type}&since=${sinceSyncId ?? 0}`);
-          return res.json();
+        transport: {
+          bootstrapFetcher: async (type, options) => {
+            const since = options?.sinceSyncId ?? 0;
+            const res = await fetch(`/api/bootstrap?type=${type}&since=${since}`);
+            return res.json();
+          },
+          transactionSender: async (batch) => {
+            const res = await fetch("/api/transactions", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(batch),
+            });
+            return res.json();
+          },
+          syncUrl: "/api/events",
         },
-        transactionSender: async (batch) => {
-          const res = await fetch("/api/transactions", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(batch),
-          });
-          return res.json();
-        },
-        syncUrl: "/api/events",
       }}
       fallback={<div>Loading...</div>}
     >
@@ -173,12 +184,16 @@ export default function Providers({ children }) {
 }
 ```
 
-Common reads and writes:
+Common reads and writes. The read hooks take a **handle** — a model class
+(decorator path) or a `store.<entity>` namespace (schema path) — and infer
+the record type from it. Every result has the same shape:
+`{ data, isLoading, isLoaded, error, reload }`.
 
 ```tsx
-const { items: issues } = useModels<Issue>("Issue");
-const { item: issue } = useModel<Issue>("Issue", issueId);
-const { items: teamIssues } = useCollection(team?.issues);
+const { data: issues } = useRecords(Issue);                 // T[]
+const { data: issue } = useRecord(Issue, issueId);          // T | null
+const { data: teamIssues } = useRecordsByIndex(Issue, "teamId", teamId);
+const { data: comments } = useRelation(issue?.comments);    // a relation
 const { phase } = useBootstrapStatus();
 
 issue.title = "New title";
@@ -193,12 +208,13 @@ batch(() => {
 const { undo, redo, canUndo, canRedo } = useUndoRedo();
 ```
 
-Schema-authored stores also have typed hook variants:
+Schema-authored stores pass the namespace as the handle — same hooks, typed
+record + `.indexed()`-constrained index keys:
 
 ```tsx
-const { item: issue } = useEntity(store.issue, issueId);
-const { items: teams } = useEntities(store.team);
-const { items: teamIssues } = useEntitiesByIndex(store.issue, "teamId", teamId);
+const { data: issue } = useRecord(store.issue, issueId);
+const { data: teams } = useRecords(store.team);
+const { data: teamIssues } = useRecordsByIndex(store.issue, "teamId", teamId);
 ```
 
 See [agent-docs/08-react-integration.md](agent-docs/08-react-integration.md) for hook return shapes, context-driven id generation, Storybook seeding, and testing patterns.
@@ -215,11 +231,13 @@ import "./models";
 
 const sm = new StoreManager({
   workspaceId: "agent-1",
-  bootstrapFetcher,
-  transactionSender,
-  syncUrl: "http://localhost:8081/api/events",
-  sseClientFactory: (url) => new EventSource(url),
-  storageAdapter: new MemoryAdapter(),
+  transport: {
+    bootstrapFetcher,
+    transactionSender,
+    syncUrl: "http://localhost:8081/api/events",
+    sseClientFactory: (url) => new EventSource(url),
+  },
+  persistence: { storageAdapter: new MemoryAdapter() },
 });
 
 await sm.bootstrap();

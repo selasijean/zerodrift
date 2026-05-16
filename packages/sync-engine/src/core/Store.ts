@@ -2,8 +2,9 @@
  * FullStore and PartialStore — per-model stores that sync memory ↔ IndexedDB.
  *
  * StoreManager creates one of these for each registered model:
- *   - FullStore for instant/lazy/local models (all instances at once)
- *   - PartialStore for partial/explicitlyRequested models (on demand)
+ *   - FullStore for eager/lazy/localOnly models (all instances at once)
+ *   - PartialStore for partial models (on demand)
+ *   - EphemeralStore for ephemeral models (pool-only, never persisted)
  */
 
 import type { BaseModel } from "./BaseModel";
@@ -48,7 +49,7 @@ export class FullStore extends ModelStore {
     await this.database.writeModels(this.modelName, records);
 
     // Only hydrate into memory if this model loads at bootstrap time
-    if (this.meta.loadStrategy === LoadStrategy.Instant) {
+    if (this.meta.loadStrategy === LoadStrategy.Eager) {
       for (const record of records) {
         this.hydrateRecord(record);
       }

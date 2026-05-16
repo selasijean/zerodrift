@@ -21,9 +21,9 @@ describe("ModelRegistry", () => {
     });
 
     it("respects the loadStrategy option passed to @ClientModel", () => {
-      // All fixtures use LoadStrategy.Instant
+      // All fixtures use LoadStrategy.Eager
       const meta = ModelRegistry.getModelMeta("TestTask")!;
-      expect(meta.loadStrategy).toBe(LoadStrategy.Instant);
+      expect(meta.loadStrategy).toBe(LoadStrategy.Eager);
     });
 
     it("getMetaForInstance resolves from the _modelName static tag", () => {

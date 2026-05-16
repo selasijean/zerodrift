@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import {
   StoreManager,
   type BootstrapResponse,
@@ -27,7 +28,7 @@ describe("StoreManager.routeCommit", () => {
   });
 
   it("fires for updates and lets the engine proceed by default", () => {
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn(async () => emptyBootstrapResponse),
       routeCommit: (op) => {
@@ -57,7 +58,7 @@ describe("StoreManager.routeCommit", () => {
   });
 
   it("fires for creates with the new model and modelName", () => {
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn(async () => emptyBootstrapResponse),
       routeCommit: (op) => {
@@ -78,7 +79,7 @@ describe("StoreManager.routeCommit", () => {
   });
 
   it("suppresses the update enqueue when router returns 'skip'", () => {
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn(async () => emptyBootstrapResponse),
       routeCommit: (op) => {
@@ -99,7 +100,7 @@ describe("StoreManager.routeCommit", () => {
   });
 
   it("suppresses create pool insert + enqueue when router returns 'skip'", () => {
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn(async () => emptyBootstrapResponse),
       routeCommit: () => "skip",
@@ -116,7 +117,7 @@ describe("StoreManager.routeCommit", () => {
 
   it("routes a throwing router through onError and proceeds normally", () => {
     const errors: Array<{ err: Error; kind: string }> = [];
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn(async () => emptyBootstrapResponse),
       routeCommit: () => {
@@ -145,7 +146,7 @@ describe("StoreManager.materializePoolOnly / clonePoolOnly", () => {
   let manager: StoreManager;
 
   beforeEach(async () => {
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn(async () => emptyBootstrapResponse),
     });
@@ -258,7 +259,7 @@ describe("StoreManager.materializePoolOnly / clonePoolOnly", () => {
     t1.hydrate({ id: "t1", title: "Old", projectId: "default" });
     addToPool(manager, "TestTask", t1);
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn(async () => emptyBootstrapResponse),
       routeCommit: (op) => {
@@ -300,7 +301,7 @@ describe("StoreManager.materializePoolOnly / clonePoolOnly", () => {
     project.id = "p1";
     project.title = "Original";
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn(async () => emptyBootstrapResponse),
       routeCommit: (op) => {
@@ -331,7 +332,7 @@ describe("StoreManager.materializePoolOnly / clonePoolOnly", () => {
     t1.hydrate({ id: "t1", title: "Old", projectId: "default" });
     addToPool(manager, "TestTask", t1);
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn(async () => emptyBootstrapResponse),
       routeCommit: (op) => {
@@ -370,7 +371,7 @@ describe("StoreManager.onModelTouched", () => {
 
   it("fires once on the clean→dirty transition, before save()", () => {
     const touched: Array<{ id: string; modelName: string }> = [];
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn(async () => emptyBootstrapResponse),
       onModelTouched: (model, modelName) => {
@@ -391,7 +392,7 @@ describe("StoreManager.onModelTouched", () => {
 
   it("does not re-fire on subsequent edits while the model stays dirty", () => {
     const touched: string[] = [];
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn(async () => emptyBootstrapResponse),
       onModelTouched: (model) => touched.push(model.id),
@@ -410,7 +411,7 @@ describe("StoreManager.onModelTouched", () => {
 
   it("fires again after save() clears pending changes", () => {
     const touched: string[] = [];
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn(async () => emptyBootstrapResponse),
       onModelTouched: (model) => touched.push(model.id),
@@ -429,7 +430,7 @@ describe("StoreManager.onModelTouched", () => {
 
   it("is suppressed during the engine's redirect replay", () => {
     const touched: string[] = [];
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn(async () => emptyBootstrapResponse),
       onModelTouched: (model) => touched.push(model.id),
@@ -462,7 +463,7 @@ describe("StoreManager.onModelTouched", () => {
 
   it("routes a throwing handler through onError without breaking the setter", () => {
     const errors: Array<{ message: string; kind: string }> = [];
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn(async () => emptyBootstrapResponse),
       onModelTouched: () => {
@@ -490,7 +491,7 @@ describe("StoreManager.onModelTouched", () => {
     b.hydrate({ id: "b", title: "B", projectId: "default" });
 
     let scaffolded = false;
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn(async () => emptyBootstrapResponse),
       onModelTouched: (model) => {

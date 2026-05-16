@@ -8,7 +8,7 @@
  *   4. Records already in IDB (e.g. from SSE) are not wiped before writing
  *   5. lastSyncId is advanced if the server returns a higher value
  *
- * Uses TestNote (LoadStrategy.Instant) as the deferred model fixture —
+ * Uses TestNote (LoadStrategy.Eager) as the deferred model fixture —
  * full bootstrap only ever ships Instant models, so the deferred phase-2
  * list must consist of Instant models too.
  * All tests trigger a Full bootstrap (no pre-existing meta) so that
@@ -16,6 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import { StoreManager } from "@sync-engine/StoreManager";
 import { BootstrapType } from "@sync-engine/Database";
 import { MemoryAdapter } from "@sync-engine/MemoryAdapter";
@@ -52,7 +53,7 @@ async function makeManager(
     .mockResolvedValueOnce(phase1Response)
     .mockResolvedValueOnce(phase2Response);
 
-  const manager = new StoreManager({
+  const manager = makeStoreManager({
     workspaceId: crypto.randomUUID(),
     bootstrapFetcher,
     storageAdapter: adapter,

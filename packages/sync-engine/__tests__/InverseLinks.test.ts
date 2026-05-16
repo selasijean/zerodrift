@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import { StoreManager } from "@sync-engine/StoreManager";
 import { ModelRegistry } from "@sync-engine/ModelRegistry";
 import {
@@ -12,7 +13,7 @@ import {
 let manager: StoreManager;
 
 beforeEach(async () => {
-  manager = new StoreManager({
+  manager = makeStoreManager({
     workspaceId: crypto.randomUUID(),
     bootstrapFetcher: vi.fn(),
   });
@@ -26,7 +27,7 @@ afterEach(async () => {
 /**
  * These tests exercise the architecturally-correct path: parent RefCollections
  * track children automatically as the pool changes. No invalidate-then-reload
- * cycle, no useModels-and-filter dance — just `parent.children.items` being
+ * cycle, no useRecords-and-filter dance — just `parent.children.items` being
  * live at all times.
  */
 describe("ObjectPool ↔ RefCollection inverse links", () => {

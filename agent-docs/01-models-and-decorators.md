@@ -29,7 +29,7 @@ The `ModelMeta` for each class includes:
 ```typescript
 {
   name: "Issue",
-  loadStrategy: LoadStrategy.Instant,
+  loadStrategy: LoadStrategy.Eager,
   usedForPartialIndexes: true,
   schemaVersion: 1,
   ctor: Issue,                        // the class constructor
@@ -46,13 +46,13 @@ A **schemaHash** is computed from all models + versions + property names. This f
 ### `@ClientModel`
 
 ```typescript
-@ClientModel({ loadStrategy: LoadStrategy.Instant, usedForPartialIndexes: true })
+@ClientModel({ name: "Issue", loadStrategy: LoadStrategy.Eager, usedForPartialIndexes: true })
 export class Issue extends BaseModel { ... }
 ```
 
-Registers the class with the registry. The `loadStrategy` controls when instances are loaded into memory — see `04-lazy-loading.md` for the full breakdown of strategies.
+Registers the class with the registry. `name` is the registry key — what `ModelMeta.name` becomes, what cross-references resolve against, and the handle for `useRecord(Issue, …)`. It defaults to `ctor.name`, but **minifiers mangle class names in production**, so pass an explicit `name` (or configure your bundler's `keep_classnames`) for any shipped build. Omitting it logs a one-time dev warning. The `loadStrategy` controls when instances are loaded into memory — see `04-lazy-loading.md` for the full breakdown of strategies.
 
-Available strategies: `Instant`, `Lazy`, `Partial`, `ExplicitlyRequested`, and `Ephemeral`. `Ephemeral` models live only in the ObjectPool — they are never written to or read from IDB. They are typically updated via `ModelStream` (secondary SSE connections) and are useful for transient data like live metrics or computation results.
+Available strategies: `Eager` (the default — in bootstrap, fully resident), `Lazy` (whole table fetched on first access), `Partial` (only the on-demand subset), `LocalOnly` (persisted to IDB but never synced), and `Ephemeral` (pool-only, never touches IDB; typically fed by `ModelStream` — live metrics, computed results).
 
 `usedForPartialIndexes: true` means other models can use this model's ID fields as index keys in IndexedDB (used by `RefCollection` queries).
 
@@ -66,12 +66,12 @@ abstract class TaskBase extends BaseModel {
   @Property({ indexed: true }) public projectId = "";
 }
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "Issue", loadStrategy: LoadStrategy.Eager })
 export class Issue extends TaskBase {
   @Property() public priority = 0;
 }
 
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "Bug", loadStrategy: LoadStrategy.Eager })
 export class Bug extends TaskBase {
   @Property() public severity = 0;
 }
@@ -146,7 +146,7 @@ public issues: RefCollection<Issue>;
 One-to-many where the **foreign key lives on the child**. `team.issues` is a `RefCollection` (the runtime class) that exposes `.items`, `.load()`, `.isLoaded`, etc.
 
 - `@ReferenceCollection` — eager. `makeModelObservable()` fires `.load()` so children land in the pool alongside the parent. Recursion is automatic: each loaded child runs its own `makeModelObservable`, so eager relationships nested further down the tree also load.
-- `@LazyReferenceCollection` — lazy. Collection stays Idle until something triggers `.load()` or the `useCollection` hook subscribes.
+- `@LazyReferenceCollection` — lazy. Collection stays Idle until something triggers `.load()` or the `useRelation` hook subscribes.
 
 The `inverseOf` FK isn't only used for IDB queries — the pool also uses it to keep `team.issues.items` reactive to delta inserts/deletes/FK changes without a re-fetch. See [10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md). And see [04-lazy-loading.md](./04-lazy-loading.md) for the loading machinery.
 
@@ -196,22 +196,24 @@ get identifier() {
 
 Wraps the getter in MobX `computed()`. The value is memoized and only re-evaluated when its tracked dependencies (`teamId`, `sortOrder`) change. Components that read `issue.identifier` only re-render when those fields change — not on every unrelated property change.
 
-## Editing models: `update`, `optimisticUpdate`, `assign`
+## Editing models: `assign`, `save`, `discardUnsavedChanges`
 
-Three flavors of bulk edit on `BaseModel`, differing in when the change is committed:
+`BaseModel` has exactly one staging primitive and one commit primitive — nothing both stages and commits:
 
-- **`model.update(data)`** — `assign(data)` then `save()`. Each call enqueues its own transaction immediately. Use when you have a single, self-contained edit.
+- **`model.assign(data)`** — bulk-stage field changes on the in-memory instance, tracked in `pendingChanges`. **Does not enqueue a transaction.** Visible locally; commit with `save()` (or an enclosing `StoreManager.atomic()` / `store.batch()`), or roll back with `discardUnsavedChanges()`.
 
-- **`model.optimisticUpdate(data)`** — alias of `assign(data)`. Stages field changes on the in-memory instance and tracks them in `pendingChanges`. **Does not enqueue a transaction.** Pair with `StoreManager.atomic()` (see [03-storemanager-and-batching.md](#) below) or call `save()` manually.
+- **`model.save()`** — flush `pendingChanges` to the transaction queue at the current boundary. On a not-yet-pooled instance (`store === null`) it routes through `commitCreate` instead — this is the create path `store.<entity>.create` / `draft(input).save()` compose.
 
-- **`model.assign(data)`** — same as `optimisticUpdate`. Lower-level name kept for backwards compat.
+- **`model.discardUnsavedChanges()`** — drop staged changes, reset to the last-saved values.
+
+> The schema-first surface wraps these as `store.<entity>.create / patch / draft / delete / archive` — see [11-schema-first-authoring.md](11-schema-first-authoring.md).
 
 The optimistic flow lets you stage a multi-step user action and commit-or-discard at the boundary:
 
 ```typescript
 storeManager.atomic(async () => {
-  book.optimisticUpdate({ title: "X" });
-  issue.optimisticUpdate({ status: "done" });
+  book.assign({ title: "X" });
+  issue.assign({ status: "done" });
   await api.someServerCall();
   // resolve → save() runs on every touched model, in one batch
 });

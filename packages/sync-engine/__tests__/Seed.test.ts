@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import { StoreManager } from "@sync-engine/StoreManager";
 import { MemoryAdapter } from "@sync-engine/MemoryAdapter";
 import { BaseModel } from "@sync-engine/BaseModel";
@@ -23,7 +24,7 @@ afterEach(async () => {
 });
 
 async function makeManager(): Promise<StoreManager> {
-  const sm = new StoreManager({
+  const sm = makeStoreManager({
     workspaceId: crypto.randomUUID(),
     bootstrapFetcher: vi.fn().mockResolvedValue({
       lastSyncId: 0,
@@ -75,7 +76,7 @@ describe("StoreManager.seed", () => {
 
   it("does not write to IDB or mark coverage", async () => {
     const adapter = new MemoryAdapter();
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,

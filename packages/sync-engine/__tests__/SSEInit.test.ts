@@ -1,8 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import {
-  StoreManager,
-  type BootstrapResponse,
-} from "@sync-engine/StoreManager";
+import { makeStoreManager } from "./helpers/storeManager";
+import { type BootstrapResponse } from "@sync-engine/StoreManager";
 import { controllableSSEClient, makeFactory } from "./helpers/sseClient";
 
 const emptyBootstrap: BootstrapResponse = {
@@ -37,7 +35,7 @@ afterEach(() => {
 
 describe("StoreManagerConfig.sseInit", () => {
   it("forwards sseInit to the default EventSource for the sync connection", async () => {
-    const sm = new StoreManager({
+    const sm = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue(emptyBootstrap),
       syncUrl: "http://localhost/sync",
@@ -55,7 +53,7 @@ describe("StoreManagerConfig.sseInit", () => {
   });
 
   it("forwards sseInit to every modelStream connection too", async () => {
-    const sm = new StoreManager({
+    const sm = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue(emptyBootstrap),
       syncUrl: "http://localhost/sync",
@@ -81,7 +79,7 @@ describe("StoreManagerConfig.sseInit", () => {
     const client = controllableSSEClient();
     const factory = vi.fn(makeFactory(client));
 
-    const sm = new StoreManager({
+    const sm = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue(emptyBootstrap),
       syncUrl: "http://localhost/sync",
@@ -99,7 +97,7 @@ describe("StoreManagerConfig.sseInit", () => {
   });
 
   it("constructs EventSource without init when sseInit is omitted", async () => {
-    const sm = new StoreManager({
+    const sm = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue(emptyBootstrap),
       syncUrl: "http://localhost/sync",

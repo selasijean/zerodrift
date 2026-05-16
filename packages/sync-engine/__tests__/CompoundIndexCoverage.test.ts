@@ -15,6 +15,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import { StoreManager } from "@sync-engine/StoreManager";
 import { MemoryAdapter } from "@sync-engine/MemoryAdapter";
 import { BaseModel } from "@sync-engine/BaseModel";
@@ -68,7 +69,7 @@ describe("compound coverage caching", () => {
       return { TestActivity: [] };
     });
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -141,7 +142,7 @@ describe("compound coverage caching", () => {
       TestActivity: [{ id: "a", taskId: "lonely", text: "x" }],
     }));
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -165,7 +166,7 @@ describe("compound coverage caching", () => {
     );
     // Force the in-memory cache to pick up the persistent record.
     await manager.teardown();
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -188,7 +189,7 @@ describe("compound coverage caching", () => {
       TestActivity: [{ id: "a", taskId: "t-other", text: "x" }],
     }));
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -210,7 +211,7 @@ describe("compound coverage caching", () => {
       0,
     );
     await manager.teardown();
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,

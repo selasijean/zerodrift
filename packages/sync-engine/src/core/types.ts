@@ -4,19 +4,23 @@ import type { BaseModel } from "./BaseModel";
 // Enums
 // ---------------------------------------------------------------------------
 
-/** How a model is loaded into the client during bootstrap. */
+/** How a model is loaded into the client. Choose by *when* you need its rows. */
 export enum LoadStrategy {
-  /** Loaded immediately during bootstrap. Most models use this. */
-  Instant = "instant",
-  /** Not loaded at bootstrap. All instances fetched when first needed. */
+  /** Loaded during bootstrap, fully resident, kept current by SSE. The
+   * default — pick this unless a model is large or rarely needed. */
+  Eager = "eager",
+  /** Not in bootstrap. The whole table is fetched the first time any of it
+   * is requested, then kept current by SSE. For rarely-opened tables. */
   Lazy = "lazy",
-  /** Only a subset of instances loaded on demand (e.g. DocumentContent). */
+  /** Not in bootstrap. Only the subset reached via an index/relation is
+   * fetched on demand and tracked by partial-index coverage. For large
+   * tables you only ever view a slice of (e.g. comments per issue). */
   Partial = "partial",
-  /** Only loaded when explicitly requested (e.g. DocumentContentHistory). */
-  ExplicitlyRequested = "explicitlyRequested",
-  /** Stored only in local IndexedDB. Used for features still in development. */
-  Local = "local",
-  /** Pool-only — never persisted to IDB. Updated only in memory via SSE streams. */
+  /** Persisted to IDB but never synced — local-only state (drafts, settings)
+   * that must survive reload but never leaves the device. */
+  LocalOnly = "localOnly",
+  /** Pool-only — never persisted to IDB. Fed purely by SSE / ModelStream.
+   * For transient data like live metrics or computed results. */
   Ephemeral = "ephemeral",
 }
 

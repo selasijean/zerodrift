@@ -154,4 +154,4 @@ The pool walks parent-side declarations only. The child's FK property doesn't ne
 - **[02-object-pool.md](./02-object-pool.md)** — the pool's structure and pub/sub channel.
 - **[04-lazy-loading.md](./04-lazy-loading.md)** — how `RefCollection`, `BackRef`, and `OwnedRefs` integrate with the pool.
 - **[07-realtime-sync.md](./07-realtime-sync.md)** — how delta packets enter the pool.
-- **[08-react-integration.md](./08-react-integration.md)** — `useModel` / `useModels` / `useIndexedCollection` consume the same primitives.
+- **[08-react-integration.md](./08-react-integration.md)** — `useRecord` / `useRecords` / `useRecordsByIndex` / `useRelation` consume the same primitives.

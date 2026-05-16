@@ -44,7 +44,7 @@ export interface RecordCommitInterface {
    *
    *     record.watch(r => r.title, (next, prev) => …)
    *
-   * Inside React, prefer `useModel` / `useCollection` — they wire the same
+   * Inside React, prefer `useRecord` / `useRelation` — they wire the same
    * thing through `useSyncExternalStore`. This is the imperative path.
    */
   watch<T>(
@@ -119,12 +119,17 @@ export interface EntityNamespace<
   getAll(): Promise<ReadonlyArray<RecordWithExtensions<S, K, Exts>>>;
 
   /**
-   * Sync pool snapshot for a single record. Returns `null` if the record
-   * isn't currently hydrated — `null` does NOT mean "doesn't exist," it
-   * means "not in this microtask's pool." Use `get(id)` if you want the
-   * engine to fetch.
+   * Sync pool snapshot for a single record. Returns `undefined` if the
+   * record isn't currently hydrated — `undefined` means "not in this
+   * microtask's pool," **not** "doesn't exist." (Mirrors
+   * `objectPool.getById`; distinct from `get`, which resolves `null` only
+   * after a fetch confirms absence.) Use `get(id)` to fetch, or `has(id)`
+   * for a boolean membership check.
    */
-  peek(id: string): RecordWithExtensions<S, K, Exts> | null;
+  peek(id: string): RecordWithExtensions<S, K, Exts> | undefined;
+  /** Sync: is this record currently hydrated in the pool? Pairs with `peek`
+   * for code that only needs presence, not the record. */
+  has(id: string): boolean;
   /** Sync pool snapshot of every record currently hydrated for this entity. */
   peekAll(): ReadonlyArray<RecordWithExtensions<S, K, Exts>>;
   /**
@@ -139,17 +144,50 @@ export interface EntityNamespace<
   ): ReadonlyArray<RecordWithExtensions<S, K, Exts>>;
 
   // ── Writes ───────────────────────────────────────────────────────────────
-  /** Allocate, hydrate, and enqueue a create transaction. */
+  // Commit model: `create` / `patch` / `delete` / `archive` commit at the
+  // current transaction boundary (standalone, or folded into an open
+  // `store.batch(...)` / `store.atomic(...)`). `draft(...)` is the only
+  // staged path — mutate the returned record, then `save()` to commit or
+  // `discardUnsavedChanges()` to roll back. Nothing both stages and commits.
+
+  /**
+   * Create a record and commit it at the current boundary. Returns the live
+   * record (already in the pool, transaction enqueued). For a record you
+   * want to build up before committing — e.g. a "create on submit, abandon
+   * on cancel" form — use `draft(input)` instead.
+   */
   create(input: InferCreateInput<S, K>): RecordWithExtensions<S, K, Exts>;
   /**
-   * Apply a partial update to a record already in the pool. Throws if no
-   * record with `id` is found — to fetch and update lazy-loaded records,
-   * `await store.<entity>.get(id)` first.
+   * Apply a partial field update and commit it at the current boundary.
+   * Returns the record so callers can chain. Throws if no record with `id`
+   * is in the pool — to patch a lazy-loaded record, `await get(id)` (or use
+   * `draft(id)`) first.
    */
-  update(id: string, input: InferUpdateInput<S, K>): void;
-  /** Delete the record with full cascade / restrict semantics. */
+  patch(
+    id: string,
+    fields: InferUpdateInput<S, K>,
+  ): RecordWithExtensions<S, K, Exts>;
+  /**
+   * Open a staged editing buffer. Nothing is committed until the returned
+   * record's `save()` runs (or an enclosing `batch`/`atomic` flushes it);
+   * `discardUnsavedChanges()` rolls back.
+   *
+   * - `draft(id)` — resolves the existing record (pool → IDB → on-demand,
+   *   same as `get`) and hands it back in staging mode. Async. Rejects if
+   *   no record with `id` exists.
+   * - `draft(input?)` — a brand-new uncommitted record with its `id` minted
+   *   up front (so relations can point at it). Sync. Abandoning it without
+   *   `save()` leaves nothing behind.
+   */
+  draft(id: string): Promise<RecordWithExtensions<S, K, Exts>>;
+  draft(
+    input?: Partial<InferCreateInput<S, K>>,
+  ): RecordWithExtensions<S, K, Exts>;
+  /** Delete the record with full cascade / restrict semantics. Commits at
+   * the current boundary. */
   delete(id: string): void;
-  /** Soft-delete (archive) the record with full cascade / restrict semantics. */
+  /** Soft-delete (archive) the record with full cascade / restrict
+   * semantics. Commits at the current boundary. */
   archive(id: string): void;
   /**
    * Hydrate records straight into the pool — no transactions enqueued, no
@@ -183,7 +221,7 @@ export interface EntityNamespace<
    * payload-less — re-read with `peekAll` / `peekByIndex` / `peek` inside
    * the handler. Returns an unsubscribe function.
    *
-   * Inside React, prefer `useModels` — it wires the same primitive through
+   * Inside React, prefer `useRecords` — it wires the same primitive through
    * `useSyncExternalStore`. This is the imperative path for headless code.
    */
   watchAll(cb: () => void): () => void;
@@ -439,10 +477,45 @@ function createEntityNamespace(
     list: readonly BaseModel[],
   ): ReadonlyArray<Rec> => list.map(toRecord);
 
-  const ns = {
+  // Overloaded so the union return type doesn't break the structural check
+  // on `return ns` (a single union-typed member isn't assignable to the
+  // overloaded interface signature; per-overload declarations are).
+  function draft(id: string): Promise<Rec>;
+  function draft(input?: Record<string, unknown>): Rec;
+  function draft(arg?: string | Record<string, unknown>): Promise<Rec> | Rec {
+    if (typeof arg === "string") {
+      return sm.getOrLoadById(registryName, arg).then((model) => {
+        if (model == null) {
+          throw noRecordError(registryName, "draft", arg);
+        }
+        return toRecord(model);
+      });
+    }
+    const instance = new Ctor();
+    if (arg != null) {
+      instance.hydrate(arg);
+    }
+    // Make it observable now (still store===null, not pooled) so fields set
+    // between `draft(input)` and `save()` route through the property setter,
+    // not a shadowing own-property that makeModelObservable would later
+    // discard for the hydrated __raw_ value. Trade-off: a non-lazy
+    // @Reference / @ReferenceCollection eager-loads at draft() time rather
+    // than save() time (same load surface as create, earlier).
+    instance.makeModelObservable();
+    return toRecord(instance);
+  }
+
+  const ns: EntityNamespace<
+    SchemaDef,
+    string,
+    readonly ExtensionDescriptor<SchemaDef>[]
+  > = {
     peek(id) {
       const model = sm.objectPool.getById(registryName, id);
-      return model == null ? null : toRecord(model);
+      return model == null ? undefined : toRecord(model);
+    },
+    has(id) {
+      return sm.objectPool.getById(registryName, id) != null;
     },
     peekAll() {
       return recordsFrom(sm.objectPool.getAll(registryName));
@@ -487,15 +560,18 @@ function createEntityNamespace(
       return recordsFrom(list);
     },
     create(input) {
+      // store===null on a fresh instance, so commitCreate (not assign+save)
+      // is the create path; it folds into an open batch/atomic via the queue.
       const instance = new Ctor();
-      // BaseModel.update routes through hydrate+save when store is null,
-      // which fires commitCreate via BaseModel.storeManager.
-      instance.update(input);
+      instance.hydrate(input as Record<string, unknown>);
+      sm.commitCreate(instance);
       return toRecord(instance);
     },
-    update(id, input) {
-      const model = requireInstance(sm, registryName, id, "update");
-      model.update(input);
+    patch(id, fields) {
+      const model = requireInstance(sm, registryName, id, "patch");
+      model.assign(fields as Record<string, unknown>);
+      model.save();
+      return toRecord(model);
     },
     delete(id) {
       const model = requireInstance(sm, registryName, id, "delete");
@@ -505,6 +581,7 @@ function createEntityNamespace(
       const model = requireInstance(sm, registryName, id, "archive");
       sm.archiveModel(model);
     },
+    draft,
     seed(records) {
       const seeded = sm.seed(
         registryName,
@@ -560,17 +637,29 @@ export function entityNamespaceRegistryName(
   return (ns as unknown as { [REGISTRY_NAME]: string })[REGISTRY_NAME];
 }
 
+/** Shared "namespace write referenced a missing record" error. `scope`
+ * qualifies where we looked — pool-only (`requireInstance`) vs. fully
+ * resolved (`draft(id)` via getOrLoadById). */
+function noRecordError(
+  registryName: string,
+  action: string,
+  id: string,
+  scope = "",
+): Error {
+  return new Error(
+    `createStore.${registryName}.${action}: no record with id "${id}"${scope}.`,
+  );
+}
+
 function requireInstance(
   sm: StoreManager,
   registryName: string,
   id: string,
-  action: "update" | "delete" | "archive",
+  action: "patch" | "delete" | "archive",
 ): BaseModel {
   const model = sm.objectPool.getById(registryName, id);
   if (model == null) {
-    throw new Error(
-      `createStore.${registryName}.${action}: no record with id "${id}" in the pool.`,
-    );
+    throw noRecordError(registryName, action, id, " in the pool");
   }
   return model;
 }

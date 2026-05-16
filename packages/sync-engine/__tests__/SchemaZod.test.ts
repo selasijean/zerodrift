@@ -92,7 +92,7 @@ const ZodIssue = z.object({
 describe("entityFromZod — runtime shape", () => {
   it("builds an EntityDef whose fields mirror the Zod object's shape", () => {
     const team = entityFromZod(ZodTeam, {
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       name: "ZodTeam",
     });
     expect(Object.keys(team.fields)).toEqual(["id", "name", "description"]);
@@ -123,7 +123,7 @@ describe("entityFromZod — TS field inference", () => {
             name: z.string(),
             opacity: z.number(),
           }),
-          { loadStrategy: LoadStrategy.Instant, name: "TypedZodLayer" },
+          { loadStrategy: LoadStrategy.Eager, name: "TypedZodLayer" },
         ),
       },
       links: {},
@@ -149,7 +149,7 @@ describe("entityFromZod — TS field inference", () => {
             opacity: z.number(),
           }),
           {
-            loadStrategy: LoadStrategy.Instant,
+            loadStrategy: LoadStrategy.Eager,
             name: "TypedZodLayerWithOverride",
             fields: {
               layerId: (b) => b.indexed(),
@@ -183,7 +183,7 @@ describe("entityFromZod — end-to-end through compileSchema", () => {
     const schema = defineSchema({
       entities: {
         zodTeam: entityFromZod(ZodTeam, {
-          loadStrategy: LoadStrategy.Instant,
+          loadStrategy: LoadStrategy.Eager,
           name: "ZodFlowTeam",
         }),
         zodComment: entityFromZod(
@@ -192,7 +192,7 @@ describe("entityFromZod — end-to-end through compileSchema", () => {
             body: z.string(),
             authorId: z.string(),
           }),
-          { loadStrategy: LoadStrategy.Instant, name: "ZodFlowComment" },
+          { loadStrategy: LoadStrategy.Eager, name: "ZodFlowComment" },
         ),
       },
       links: {},
@@ -212,7 +212,7 @@ describe("entityFromZod — end-to-end through compileSchema", () => {
     const schema = defineSchema({
       entities: {
         zodMixedTeam: entityFromZod(z.object({ id: z.string(), name: z.string() }), {
-          loadStrategy: LoadStrategy.Instant,
+          loadStrategy: LoadStrategy.Eager,
           name: "ZodMixedTeam",
         }),
         zodMixedIssue: entityFromZod(
@@ -220,7 +220,7 @@ describe("entityFromZod — end-to-end through compileSchema", () => {
             id: z.string(),
             title: z.string(),
           }),
-          { loadStrategy: LoadStrategy.Instant, name: "ZodMixedIssue" },
+          { loadStrategy: LoadStrategy.Eager, name: "ZodMixedIssue" },
         ),
       },
       // Links are still authored via the schema DSL; Zod doesn't model the
@@ -242,12 +242,12 @@ describe("entityFromZod — end-to-end through compileSchema", () => {
 describe("entityFromZod — link()-side FKs still come from s.refId", () => {
   it("compiles a schema where the FK is added by hand and the rest via Zod", () => {
     const teamDef = entityFromZod(z.object({ id: z.string(), name: z.string() }), {
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       name: "ZodLinkedTeam",
     });
     const issueDef = entityFromZod(
       z.object({ id: z.string(), title: z.string() }),
-      { loadStrategy: LoadStrategy.Instant, name: "ZodLinkedIssue" },
+      { loadStrategy: LoadStrategy.Eager, name: "ZodLinkedIssue" },
     );
 
     // Manually splice in the refId — Zod doesn't carry FK semantics.
@@ -300,7 +300,7 @@ describe("entityFromZod — per-field overrides", () => {
 
   it("chains modifiers via the function form", () => {
     const def = entityFromZod(ZodOverridable, {
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       name: "OverrideChain",
       fields: {
         email: (b) => b.indexed(),
@@ -317,7 +317,7 @@ describe("entityFromZod — per-field overrides", () => {
 
   it("replaces the auto-derived field via the builder form (FK case)", () => {
     const def = entityFromZod(ZodOverridable, {
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       name: "OverrideReplace",
       fields: {
         teamId: s.refId("team").nullable().indexed(),
@@ -333,11 +333,11 @@ describe("entityFromZod — per-field overrides", () => {
     const schema = defineSchema({
       entities: {
         team: entityFromZod(z.object({ id: z.string(), name: z.string() }), {
-          loadStrategy: LoadStrategy.Instant,
+          loadStrategy: LoadStrategy.Eager,
           name: "OverrideEndToEndTeam",
         }),
         issue: entityFromZod(ZodOverridable, {
-          loadStrategy: LoadStrategy.Instant,
+          loadStrategy: LoadStrategy.Eager,
           name: "OverrideEndToEndIssue",
           fields: {
             teamId: s.refId("team").nullable().indexed(),
@@ -380,7 +380,7 @@ describe("entityFromZod — per-field overrides", () => {
     >();
 
     entityFromZod(ZodOverridable, {
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         // @ts-expect-error override keys must exist on the Zod object
         typo: (b) => b.indexed(),
@@ -391,13 +391,13 @@ describe("entityFromZod — per-field overrides", () => {
   // Type-level: override metadata (.indexed(), refId target, etc.) propagates
   // into the inferred EntityDef, so IndexedFieldKeys can extract the indexed
   // fields and downstream APIs (store.<entity>.getByIndex / peekByIndex /
-  // useEntitiesByIndex) see them. Covers both override forms — the
+  // useRecordsByIndex) see them. Covers both override forms — the
   // builder replacement (`teamId`) and the chain modifier (`email`).
   it("propagates override metadata into the entity's TS type so IndexedFieldKeys works", () => {
     const schema = defineSchema({
       entities: {
         team: entity({
-          loadStrategy: LoadStrategy.Instant,
+          loadStrategy: LoadStrategy.Eager,
           fields: { id: s.id(), name: s.string() },
         }),
         issue: entityFromZod(
@@ -408,7 +408,7 @@ describe("entityFromZod — per-field overrides", () => {
             title: z.string(),
           }),
           {
-            loadStrategy: LoadStrategy.Instant,
+            loadStrategy: LoadStrategy.Eager,
             name: "PropagationIssue",
             fields: {
               teamId: s.refId("team").nullable().indexed(),

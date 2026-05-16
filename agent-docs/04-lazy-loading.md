@@ -16,7 +16,7 @@ An app with 50,000 issues, 10,000 comments, and 1,000 users doesn't need all of 
 Every model declares a `LoadStrategy` via `@ClientModel`:
 
 ```typescript
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ loadStrategy: LoadStrategy.Eager })
 export class Team extends BaseModel { ... }
 
 @ClientModel({ loadStrategy: LoadStrategy.Partial })
@@ -25,14 +25,15 @@ export class DocumentContent extends BaseModel { ... }
 
 | Strategy | Loaded at startup | Loaded when |
 |---|---|---|
-| `Instant` | Yes — all instances | Bootstrap |
-| `Lazy` | No | First access via collection or hook |
-| `Partial` | No | When a parent referencing them is viewed |
-| `ExplicitlyRequested` | No | Only when code calls `sm.getOrLoadById(modelName, id)` |
+| `Eager` | Yes — all instances | Bootstrap |
+| `Lazy` | No | First access fetches the whole table |
+| `Partial` | No | Only the subset reached via an index/relation |
+| `LocalOnly` | From IDB | Persisted locally, never synced |
+| `Ephemeral` | No | Pool-only, fed by SSE / `ModelStream` |
 
-`Instant` models get a `FullStore`. All others get a `PartialStore`. The `FullStore` loads everything at bootstrap; the `PartialStore` starts empty and fills on demand.
+`Partial` models get a `PartialStore` (starts empty, fills on demand); `Ephemeral` gets an `EphemeralStore` (pool-only); everything else gets a `FullStore` that loads from IDB/bootstrap.
 
-**`Instant` is the only strategy that ships in the *initial* full-bootstrap payload** — the bootstrap pipeline restricts `onlyModels` to Instant. Lazy / Partial / ExplicitlyRequested models reach the client through one of three on-demand paths that all reuse the same `bootstrapFetcher`:
+**`Eager` is the only strategy that ships in the *initial* full-bootstrap payload** — the bootstrap pipeline restricts `onlyModels` to Eager. Lazy / Partial models reach the client through one of three on-demand paths that all reuse the same `bootstrapFetcher`:
 
 - `getOrLoadCollection(modelName, indexKey, value)` — subset by FK/index.
 - `getOrLoadById` / `getOrLoadByIds` — single-id or batch by id.
@@ -133,14 +134,14 @@ The `idsGetter` is a live function that reads the current array. When `team.memb
 ## How This Helps Heap Size
 
 Consider a workspace with:
-- 200 Teams (Instant)
-- 50,000 Issues (Instant)
+- 200 Teams (Eager)
+- 50,000 Issues (Eager)
 - 200,000 Comments (Lazy)
 - 50,000 DocumentContent records (Partial)
 
 At startup:
 - 200 Team instances in heap ✓
-- 50,000 Issue instances in heap ✓ (unavoidable — Instant)
+- 50,000 Issue instances in heap ✓ (unavoidable — Eager)
 - 0 Comment instances in heap ✓ (in IDB only)
 - 0 DocumentContent instances in heap ✓ (in IDB only)
 
@@ -214,13 +215,13 @@ Manual `coveringIndexes` and auto-derived paths are union'd, deduped by `(key, v
 ## The `usedForPartialIndexes` Flag
 
 ```typescript
-@ClientModel({ loadStrategy: LoadStrategy.Instant, usedForPartialIndexes: true })
+@ClientModel({ loadStrategy: LoadStrategy.Eager, usedForPartialIndexes: true })
 export class Issue extends BaseModel { ... }
 ```
 
 When this is `true`, the engine adds the model's ID to a `partialIndexValues` set on any `RefCollection` that points at it. This allows the IDB query for those collections to use an index scan instead of a full table scan, even for partial models.
 
-In practice: if DocumentContent (Partial) references Issue (Instant, `usedForPartialIndexes: true`), then loading all DocumentContent for a given Issue uses an indexed IDB query rather than scanning the entire DocumentContent table.
+In practice: if DocumentContent (Partial) references Issue (Eager, `usedForPartialIndexes: true`), then loading all DocumentContent for a given Issue uses an indexed IDB query rather than scanning the entire DocumentContent table.
 
 ## Collection States
 
@@ -246,4 +247,4 @@ Error
 
 The state tracks whether the loader has run — *not* whether `items` is current. Items is kept in sync with the pool by the inverse-link machinery (see **[10-inverse-links-and-reactivity.md](./10-inverse-links-and-reactivity.md)**), so a `Loaded` collection stays correct as deltas arrive without ever transitioning back to `Idle`. `invalidate()` still exists on the collection API — it forces the next access to re-query IDB — but the engine itself doesn't call it during normal delta flow.
 
-The React hooks read this state machine: `useCollection` and `useBackRef` (which wrap a runtime collection / back-ref directly) expose `isLoading`, `isLoaded`, and `error`. The pool-keyed hooks (`useModel`, `useModels`, `useIndexedCollection`) expose only `isLoading` and `error` — they don't carry `isLoaded` because their data may come from the pool synchronously.
+The React hooks read this state machine through the uniform `AsyncResource` shape (`{ data, isLoading, isLoaded, error, reload }`). `useRelation` (which wraps a runtime collection / back-ref directly) reflects the collection's own `isLoaded`; the pool-keyed hooks (`useRecord`, `useRecords`, `useRecordsByIndex`) derive `isLoaded` as "ready, not loading, no error" — true from frame zero for a pool hit, since their data can come from the pool synchronously.

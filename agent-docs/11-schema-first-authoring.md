@@ -11,14 +11,14 @@ import { createStore } from "sync-engine/schema";
 export const schema = defineSchema({
   entities: {
     team: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id:   s.id(),
         name: s.string(),
       },
     }),
     issue: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id:        s.id(),
         title:     s.string().default(""),
@@ -66,7 +66,7 @@ Returns a plain `SchemaDef`. Pure data; no side effects until you pass it to `cr
 
 ```typescript
 entity({
-  loadStrategy: LoadStrategy.Instant,
+  loadStrategy: LoadStrategy.Eager,
   usedForPartialIndexes: true,    // optional
   name: "Issue",                   // optional — defaults to PascalCase of the schema key
   version: 2,                      // optional — overrides the auto-computed schemaVersion hash
@@ -155,27 +155,41 @@ The default flavor is async (`get*`). The `peek*` family is the sync escape hatc
 
 ```typescript
 const issue = await store.issue.get(id);                  // pool-first; falls back to IDB / fetcher
-const team = store.team.peek(teamId);                     // sync; null means "not in pool"
+const team = store.team.peek(teamId);                     // sync; undefined = "not in pool"
+const isHere = store.team.has(teamId);                    // sync boolean membership check
 const teamIssues = await store.issue.getByIndex("teamId", teamId);
 //                                          ^^^^^^^^ key is constrained to .indexed() fields
 const allTeams = await store.team.getAll();
 await store.issue.refreshByIndex("teamId", teamId);       // evict + reload, server-truth
 ```
 
-`peek*` reads return whatever's in the pool right now — `null` doesn't mean "doesn't exist," it means "not currently hydrated." Use `get*` if you want the engine to fetch.
+`peek(id)` returns `undefined` when the record isn't hydrated — `undefined` means "not in this microtask's pool," **not** "doesn't exist" (it mirrors `objectPool.getById`; only a `get*` fetch can confirm true absence). Use `get*` to fetch, or `has(id)` for a boolean presence check. `peekAll` / `peekByIndex` return arrays (empty when nothing matches).
 
 ### Mutations
 
+Commit model: `create` / `patch` / `delete` / `archive` commit at the current
+transaction boundary (standalone, or folded into an open `store.batch` /
+`store.atomic`). `draft(...)` is the only staged path — mutate the returned
+record, then `save()` to commit or `discardUnsavedChanges()` to roll back.
+**Nothing both stages and commits.**
+
 ```typescript
-store.issue.create({ id?, title, teamId })             // returns the typed record
-store.issue.update(id, { title?, priority? })          // partial; throws if id not in pool
+store.issue.create({ id?, title, teamId })             // commit now → typed record
+store.issue.patch(id, { title?, priority? })           // partial; commit now → record
 store.issue.delete(id)                                 // cascade / restrict via onDelete
 store.issue.archive(id)                                // soft-delete, same semantics
+store.issue.draft(input?)                              // staged NEW record (sync); id minted
+store.issue.draft(id)                                  // staged existing record (async)
 store.issue.seed([{ id: "i1", ... }])                  // hydrate-into-pool, no transaction
                                                        //   (for tests / stories)
 ```
 
-`update` requires the record to be in the pool. To update a lazy-loaded record, `await store.issue.get(id)` first.
+`patch` requires the record to be in the pool (throws otherwise). To edit a
+lazy-loaded record, use `await store.issue.draft(id)` — it resolves the record
+the same way `get` does (pool → IDB → on-demand) and hands it back staged.
+`draft(input)` returns an uncommitted new record (id minted up front so
+relations can point at it); abandoning it without `save()` leaves nothing
+behind.
 
 ### Per-record commit interface
 
@@ -190,17 +204,17 @@ issue.save();                   // single transaction with both fields
 issue.discardUnsavedChanges();  // revert to last-saved values
 ```
 
-This is how you batch imperative writes inside an event handler without going through `store.issue.update(id, ...)` per field.
+This is how you batch imperative writes inside an event handler without going through `store.issue.patch(id, ...)` per field (use `await store.issue.draft(id)` to get a staged record by id).
 
 ### Subscriptions
 
-Three primitives, all payload-less — the callback fires, you re-read. Returns an unsubscribe function.
+Four `watch*` primitives, one verb, all payload-less — the callback fires, you re-read. Returns an unsubscribe function.
 
 ```typescript
 store.issue.watchAll(() => { /* any pool change for Issue */ });
 store.issue.watchByIndex("teamId", teamId, () => { /* matching record added/removed */ });
 issue.watch(r => r.title, (next, prev) => { /* this record's title changed */ });
-record.issues.subscribe(() => { /* relation collection's items changed */ });
+record.issues.watch(() => { /* relation collection's items changed */ });
 ```
 
 `watchByIndex` runs its predicate at the pool's write-time, so listeners only fire on matching mutations. **Caveat:** this catches set-membership changes (insert / remove / re-put), not field reassignments — a record moving between FK buckets via `record.teamId = "..."` goes through MobX boxes, not pool notify. Pair with `record.watch` if you need that case too.
@@ -217,8 +231,8 @@ store.batch(async fn): Promise<string>     // async — finally-fires endBatch e
 // On resolve, every touched model's save() runs in one batch (one undo entry).
 // On throw, every touched model's discardUnsavedChanges() runs and the error rethrows.
 await store.atomic(async () => {
-  book.optimisticUpdate({ title: "X" });
-  issue.optimisticUpdate({ status: "done" });
+  book.assign({ title: "X" });
+  issue.assign({ status: "done" });
   await api.call(); // throws → both edits roll back
 });
 
@@ -280,7 +294,7 @@ extend(schema, {
 Mark a schema entity `external: true` to reference a decorator-registered class without redeclaring it:
 
 ```typescript
-@ClientModel({ loadStrategy: LoadStrategy.Instant })
+@ClientModel({ name: "User", loadStrategy: LoadStrategy.Eager })
 class User extends BaseModel {
   @Property() declare email: string;
   @Property() declare name: string;
@@ -291,11 +305,11 @@ const schema = defineSchema({
     user: entity({
       external: true,
       name: "User",                 // required when external — registry-name match
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: { id: s.id() },        // declarative only — schema doesn't own the class
     }),
     comment: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id: s.id(),
         body: s.string(),
@@ -332,7 +346,7 @@ const ZodIssue = z.object({
 const schema = defineSchema({
   entities: {
     issue: entityFromZod(ZodIssue, {
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       name: "Issue",
     }),
   },
@@ -346,7 +360,7 @@ Zod doesn't carry FK or index metadata, so use `opts.fields` to layer that on pe
 
 ```typescript
 entityFromZod(ZodIssue, {
-  loadStrategy: LoadStrategy.Instant,
+  loadStrategy: LoadStrategy.Eager,
   name: "Issue",
   fields: {
     teamId:    s.refId("team").nullable().indexed(),  // full replacement
@@ -362,24 +376,26 @@ Override keys are constrained to fields actually declared on the Zod object, so 
 
 In `sync-engine/react`:
 
+Pass the `store.<entity>` namespace as the **handle** to the same read hooks
+used everywhere else (a decorator class is the other handle form):
+
 ```typescript
 import {
-  useEntities,
-  useEntitiesByIndex,
-  useEntitiesByIndexValues,
-  useEntity,
+  useRecord,
+  useRecords,
+  useRecordsByIndex,
 } from "sync-engine/react";
 
-const { item: issue } = useEntity(store.issue, issueId);
-const { items: teams } = useEntities(store.team);
-const { items: teamIssues } = useEntitiesByIndex(store.issue, "teamId", teamId);
-//                                                            ^^^^^^^^ autocompletes to indexed fields only
+const { data: issue } = useRecord(store.issue, issueId);
+const { data: teams } = useRecords(store.team);
+const { data: teamIssues } = useRecordsByIndex(store.issue, "teamId", teamId);
+//                                                          ^^^^^^^^ autocompletes to indexed fields only
 
-// Multi-value form — issues for any of these teams.
-const { items: myIssues } = useEntitiesByIndexValues(store.issue, "teamId", myTeamIds);
+// Single value OR a values array — issues for any of these teams.
+const { data: myIssues } = useRecordsByIndex(store.issue, "teamId", myTeamIds);
 ```
 
-Same return shape as the existing `useModel` / `useModels` / `useIndexedCollection` (`{ item | items, isLoading, error, reload }`); the schema-typed hooks just infer the record type and indexed-key constraint from the namespace. Internally they extract the registry name and delegate to the same `useSyncExternalStore` machinery, so reactivity is identical.
+Uniform `AsyncResource` shape (`{ data, isLoading, isLoaded, error, reload }`); a namespace handle infers the record type and constrains the index key to the schema's `.indexed()` fields. See [08-react-integration.md](08-react-integration.md) for the full hook surface.
 
 ## What to expect at runtime
 

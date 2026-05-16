@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import { MemoryAdapter } from "@sync-engine/MemoryAdapter";
 import { ModelRegistry } from "@sync-engine/ModelRegistry";
-import { StoreManager } from "@sync-engine/StoreManager";
 import { BootstrapType, currentModelVersions } from "@sync-engine/Database";
 import { BaseModel } from "@sync-engine/BaseModel";
 import "./fixtures";
@@ -220,7 +220,7 @@ describe("Per-model schemaVersion migration", () => {
       return { lastSyncId: 100, subscribedSyncGroups: [], models };
     });
 
-    const manager = new StoreManager({
+    const manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher,
       storageAdapter: adapter,
@@ -265,7 +265,7 @@ describe("Per-model schemaVersion migration", () => {
       return { lastSyncId: 100, subscribedSyncGroups: [], models: {} };
     });
 
-    const manager = new StoreManager({
+    const manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher,
       storageAdapter: adapter,

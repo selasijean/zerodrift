@@ -20,7 +20,7 @@ import type { BaseModel } from "@sync-engine/BaseModel";
 const happyPathSchema = defineSchema({
   entities: {
     schTeam: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       usedForPartialIndexes: true,
       fields: {
         id: s.id(),
@@ -29,7 +29,7 @@ const happyPathSchema = defineSchema({
       },
     }),
     schUser: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id: s.id(),
         email: s.string().indexed(),
@@ -37,7 +37,7 @@ const happyPathSchema = defineSchema({
       },
     }),
     schIssue: entity({
-      loadStrategy: LoadStrategy.Instant,
+      loadStrategy: LoadStrategy.Eager,
       fields: {
         id: s.id(),
         title: s.string().default(""),
@@ -89,7 +89,7 @@ describe("compileSchema — registry shape", () => {
   });
 
   it("propagates loadStrategy and usedForPartialIndexes", () => {
-    expect(meta("SchTeam").loadStrategy).toBe(LoadStrategy.Instant);
+    expect(meta("SchTeam").loadStrategy).toBe(LoadStrategy.Eager);
     expect(meta("SchTeam").usedForPartialIndexes).toBe(true);
     expect(meta("SchIssue").usedForPartialIndexes).toBe(false);
   });
@@ -258,7 +258,7 @@ describe("compileSchema — validation failures", () => {
         defineSchema({
           entities: {
             badA: entity({
-              loadStrategy: LoadStrategy.Instant,
+              loadStrategy: LoadStrategy.Eager,
               fields: { id: s.id(), name: s.string() },
             }),
           },
@@ -279,7 +279,7 @@ describe("compileSchema — validation failures", () => {
         defineSchema({
           entities: {
             badB: entity({
-              loadStrategy: LoadStrategy.Instant,
+              loadStrategy: LoadStrategy.Eager,
               fields: { id: s.id(), name: s.string() },
             }),
           },
@@ -300,7 +300,7 @@ describe("compileSchema — validation failures", () => {
         defineSchema({
           entities: {
             badC: entity({
-              loadStrategy: LoadStrategy.Instant,
+              loadStrategy: LoadStrategy.Eager,
               fields: { id: s.id(), name: s.string() },
             }),
           },
@@ -321,18 +321,18 @@ describe("compileSchema — validation failures", () => {
         defineSchema({
           entities: {
             badD: entity({
-              loadStrategy: LoadStrategy.Instant,
+              loadStrategy: LoadStrategy.Eager,
               fields: {
                 id: s.id(),
                 otherId: s.refId("badE"),
               },
             }),
             badE: entity({
-              loadStrategy: LoadStrategy.Instant,
+              loadStrategy: LoadStrategy.Eager,
               fields: { id: s.id() },
             }),
             badF: entity({
-              loadStrategy: LoadStrategy.Instant,
+              loadStrategy: LoadStrategy.Eager,
               fields: { id: s.id() },
             }),
           },
@@ -353,11 +353,11 @@ describe("compileSchema — validation failures", () => {
         defineSchema({
           entities: {
             collide: entity({
-              loadStrategy: LoadStrategy.Instant,
+              loadStrategy: LoadStrategy.Eager,
               fields: { id: s.id() },
             }),
             other: entity({
-              loadStrategy: LoadStrategy.Instant,
+              loadStrategy: LoadStrategy.Eager,
               name: "Collide",
               fields: { id: s.id() },
             }),
@@ -374,7 +374,7 @@ describe("compileSchema — validation failures", () => {
         defineSchema({
           entities: {
             badG: entity({
-              loadStrategy: LoadStrategy.Instant,
+              loadStrategy: LoadStrategy.Eager,
               fields: {
                 id: s.id(),
                 otherId: s.refId("badH"),
@@ -382,7 +382,7 @@ describe("compileSchema — validation failures", () => {
               },
             }),
             badH: entity({
-              loadStrategy: LoadStrategy.Instant,
+              loadStrategy: LoadStrategy.Eager,
               fields: { id: s.id() },
             }),
           },
@@ -403,14 +403,14 @@ describe("compileSchema — validation failures", () => {
         defineSchema({
           entities: {
             badI: entity({
-              loadStrategy: LoadStrategy.Instant,
+              loadStrategy: LoadStrategy.Eager,
               fields: {
                 id: s.id(),
                 otherId: s.refId("badJ"),
               },
             }),
             badJ: entity({
-              loadStrategy: LoadStrategy.Instant,
+              loadStrategy: LoadStrategy.Eager,
               fields: { id: s.id() },
             }),
           },
@@ -444,7 +444,7 @@ describe("compileSchema — validation failures", () => {
           defineSchema({
             entities: {
               [reservedKey]: entity({
-                loadStrategy: LoadStrategy.Instant,
+                loadStrategy: LoadStrategy.Eager,
                 fields: { id: s.id() },
               }),
             },

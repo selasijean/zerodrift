@@ -1,11 +1,11 @@
 "use client";
 
-import { useSyncEngine, useModels, useUndoRedo } from "sync-engine/react";
+import { useSyncEngine, useRecords, useUndoRedo } from "sync-engine/react";
 import { Issue } from "@/sync/models";
 
 export default function Page() {
   const { sm: store } = useSyncEngine();
-  const { items: issues } = useModels<Issue>("Issue");
+  const { data: issues } = useRecords(Issue);
   const { undo, redo, canUndo, canRedo } = useUndoRedo();
 
   const createIssue = () => {

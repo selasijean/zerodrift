@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import {
   StoreManager,
   type BootstrapResponse,
@@ -40,7 +41,7 @@ describe("onError", () => {
       .fn()
       .mockRejectedValue(new Error("network down"));
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue(emptyBootstrap),
       storageAdapter: new MemoryAdapter(),
@@ -72,7 +73,7 @@ describe("onError", () => {
     const onError = vi.fn();
     const adapter = new MemoryAdapter();
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue(emptyBootstrap),
       storageAdapter: adapter,
@@ -105,7 +106,7 @@ describe("onError", () => {
     const onError = vi.fn();
     const transactionSender = vi.fn().mockRejectedValue(new Error("timeout"));
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue(emptyBootstrap),
       storageAdapter: new MemoryAdapter(),
@@ -128,7 +129,7 @@ describe("onError", () => {
     const onError = vi.fn();
     const onSyncGroupDelete = vi.fn().mockRejectedValue(new Error("boom"));
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -159,7 +160,7 @@ describe("onError", () => {
     const onError = vi.fn();
     const sseClient = controllableSSEClient();
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue(emptyBootstrap),
       storageAdapter: new MemoryAdapter(),
@@ -185,7 +186,7 @@ describe("onError", () => {
       throw new Error("EventSource refused");
     });
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue(emptyBootstrap),
       storageAdapter: new MemoryAdapter(),
@@ -211,7 +212,7 @@ describe("onError", () => {
         return emptyBootstrap;
       });
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher,
       storageAdapter: new MemoryAdapter(),
@@ -247,7 +248,7 @@ describe("onError", () => {
         return emptyBootstrap;
       });
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher,
       storageAdapter: new MemoryAdapter(),
@@ -268,7 +269,7 @@ describe("onError", () => {
     });
     const onDemandFetcher = vi.fn().mockRejectedValue(new Error("network"));
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue(emptyBootstrap),
       storageAdapter: new MemoryAdapter(),
@@ -294,7 +295,7 @@ describe("onError", () => {
     // Same failure setup as the eagerReferenceLoad test, but without onError.
     const onDemandFetcher = vi.fn().mockRejectedValue(new Error("network"));
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue(emptyBootstrap),
       storageAdapter: new MemoryAdapter(),

@@ -16,6 +16,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import { StoreManager } from "@sync-engine/StoreManager";
 import {
   SyncConnection,
@@ -84,7 +85,7 @@ let sm: StoreManager;
 
 beforeEach(async () => {
   BaseModel.storeManager = null;
-  sm = new StoreManager({
+  sm = makeStoreManager({
     workspaceId: crypto.randomUUID(),
     bootstrapFetcher: vi.fn().mockResolvedValue({
       lastSyncId: 0,
@@ -110,7 +111,7 @@ describe("Headless usage — no browser globals", () => {
     delete (globalThis as Record<string, unknown>)["EventSource"];
 
     expect(() => {
-      new StoreManager({
+      makeStoreManager({
         workspaceId: "test",
         bootstrapFetcher: vi.fn(),
       });
@@ -209,7 +210,7 @@ describe("Custom sseClientFactory", () => {
   it("StoreManager passes sseClientFactory through to SyncConnection", async () => {
     const { factory, calls } = recordingSSEFactory();
 
-    const agent = new StoreManager({
+    const agent = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -234,7 +235,7 @@ describe("modelStreams wiring", () => {
   it("bootstrap connects model streams using sseClientFactory", async () => {
     const { factory, calls } = recordingSSEFactory();
 
-    const agent = new StoreManager({
+    const agent = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -260,7 +261,7 @@ describe("modelStreams wiring", () => {
   it("bootstrap connects both syncUrl and modelStreams", async () => {
     const { factory, calls } = recordingSSEFactory();
 
-    const agent = new StoreManager({
+    const agent = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -289,7 +290,7 @@ describe("modelStreams wiring", () => {
       return c;
     };
 
-    const agent = new StoreManager({
+    const agent = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -321,7 +322,7 @@ describe("modelStreams wiring", () => {
       return c;
     };
 
-    const agent = new StoreManager({
+    const agent = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -360,11 +361,11 @@ describe("modelStreams wiring", () => {
 
 describe("Isolated agent sessions", () => {
   it("two StoreManagers have independent pools", async () => {
-    const agentA = new StoreManager({
+    const agentA = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn(),
     });
-    const agentB = new StoreManager({
+    const agentB = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn(),
     });
@@ -419,7 +420,7 @@ describe("Isolated agent sessions", () => {
 
 describe("MemoryAdapter as storageAdapter", () => {
   it("StoreManager bootstraps successfully with MemoryAdapter", async () => {
-    const agent = new StoreManager({
+    const agent = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 7,
@@ -638,7 +639,7 @@ describe("Reactivity in headless mode", () => {
     project.makeModelObservable();
 
     const notifications: string[] = [];
-    project.tasks.subscribe(() => notifications.push("fired"));
+    project.tasks.watch(() => notifications.push("fired"));
 
     await project.tasks.load();
 
@@ -651,7 +652,7 @@ describe("Reactivity in headless mode", () => {
     project.makeModelObservable();
 
     const notifications: string[] = [];
-    const unsubscribe = project.tasks.subscribe(() =>
+    const unsubscribe = project.tasks.watch(() =>
       notifications.push("fired"),
     );
 

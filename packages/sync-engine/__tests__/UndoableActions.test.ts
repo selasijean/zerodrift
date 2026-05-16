@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import {
   StoreManager,
-  type StoreManagerConfig,
+  type NormalizedConfig,
 } from "@sync-engine/StoreManager";
 import type { UndoableAction } from "@sync-engine/Transaction";
 import type { EngineErrorContext } from "@sync-engine/types";
@@ -17,8 +18,8 @@ const trackingHandler = () =>
     }),
   );
 
-const makeManager = async (opts?: Partial<StoreManagerConfig>) => {
-  const manager = new StoreManager({
+const makeManager = async (opts?: Partial<NormalizedConfig>) => {
+  const manager = makeStoreManager({
     workspaceId: crypto.randomUUID(),
     bootstrapFetcher: vi.fn(),
     ...opts,
