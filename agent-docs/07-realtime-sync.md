@@ -206,17 +206,20 @@ Both `SyncConnection` and `ModelStream` extend `BaseSSEConnection`, which provid
 
 ```typescript
 const sm = new StoreManager({
-  // ...
-  modelStreams: [
-    {
-      url: "http://calc-engine/events",
-      onStatusChange: (connected) => {
-        if (!connected) {
-          sm.refreshAllOfModel("Metric");
-        }
+  workspaceId,
+  transport: {
+    bootstrapFetcher,
+    modelStreams: [
+      {
+        url: "http://calc-engine/events",
+        onStatusChange: (connected) => {
+          if (!connected) {
+            sm.refreshAllOfModel("Metric");
+          }
+        },
       },
-    },
-  ],
+    ],
+  },
 });
 ```
 

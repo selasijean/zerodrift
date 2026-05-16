@@ -10,7 +10,7 @@ Wrap your app in `SyncProvider`. It creates the `StoreManager`, runs bootstrap, 
 <SyncProvider
   config={{
     workspaceId: "workspace-123",
-    baseUrl: "/api/sync",
+    transport: { bootstrapFetcher, syncUrl: "/api/events" },
   }}
   fallback={<LoadingScreen />}
 >
@@ -32,11 +32,13 @@ type AppContext = { userId: string; tenantId: string };
 <SyncProvider<AppContext>
   config={{
     workspaceId: "ws-1",
-    bootstrapFetcher,
-    identifierFn: (meta, ctx) =>
-      ctx == null
-        ? crypto.randomUUID()
-        : `${ctx.tenantId}:${meta.name}:${crypto.randomUUID()}`,
+    transport: { bootstrapFetcher },
+    advanced: {
+      identifierFn: (meta, ctx) =>
+        ctx == null
+          ? crypto.randomUUID()
+          : `${ctx.tenantId}:${meta.name}:${crypto.randomUUID()}`,
+    },
   }}
   context={{ userId, tenantId }}
 >
@@ -218,16 +220,18 @@ export const Default = {
     (Story) => (
       <SyncProvider config={{
         workspaceId: "story",
-        storageAdapter: new MemoryAdapter(),
-        bootstrapFetcher: async () => ({
-          lastSyncId: 0,
-          subscribedSyncGroups: [],
-          models: {
-            Issue: [{ id: "i1", title: "Story issue", teamId: "t1" }],
-            Team:  [{ id: "t1", name: "Story team" }],
-          },
-        }),
-        // syncUrl omitted → no SSE connection.
+        persistence: { storageAdapter: new MemoryAdapter() },
+        transport: {
+          // syncUrl omitted → no SSE connection.
+          bootstrapFetcher: async () => ({
+            lastSyncId: 0,
+            subscribedSyncGroups: [],
+            models: {
+              Issue: [{ id: "i1", title: "Story issue", teamId: "t1" }],
+              Team:  [{ id: "t1", name: "Story team" }],
+            },
+          }),
+        },
       }} fallback={null}>
         <Story />
       </SyncProvider>
@@ -261,10 +265,12 @@ export const Default = {
     (Story) => (
       <SyncProvider config={{
         workspaceId: "story",
-        storageAdapter: new MemoryAdapter(),
-        bootstrapFetcher: async () => ({
-          lastSyncId: 0, subscribedSyncGroups: [], models: {},
-        }),
+        persistence: { storageAdapter: new MemoryAdapter() },
+        transport: {
+          bootstrapFetcher: async () => ({
+            lastSyncId: 0, subscribedSyncGroups: [], models: {},
+          }),
+        },
       }} fallback={null}>
         <Seed><Story /></Seed>
       </SyncProvider>

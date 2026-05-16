@@ -93,11 +93,14 @@ export function SyncProvider<TContext = unknown>({
 
     const sm = new StoreManager<TContext>({
       ...cfgRef.current,
-      onPhaseChange: (phase, detail) => {
-        cfgRef.current.onPhaseChange?.(phase, detail);
-        if (active) {
-          setStatus({ phase, detail });
-        }
+      hooks: {
+        ...cfgRef.current.hooks,
+        onPhaseChange: (phase, detail) => {
+          cfgRef.current.hooks?.onPhaseChange?.(phase, detail);
+          if (active) {
+            setStatus({ phase, detail });
+          }
+        },
       },
     });
     if (contextRef.current !== undefined) {
@@ -269,7 +272,7 @@ function useRecordByName<T extends BaseModel>(
     () => sm.getOrLoadById(modelName, id!),
     ready && id != null,
     `${modelName}:${id ?? ""}`,
-    // Skip the load when the pool already has the entry — instant models
+    // Skip the load when the pool already has the entry — eager models
     // render with isLoading: false from frame zero.
     () => id != null && pool.getById(modelName, id) == null,
   );

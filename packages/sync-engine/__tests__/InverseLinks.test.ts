@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import { StoreManager } from "@sync-engine/StoreManager";
 import { ModelRegistry } from "@sync-engine/ModelRegistry";
 import {
@@ -12,7 +13,7 @@ import {
 let manager: StoreManager;
 
 beforeEach(async () => {
-  manager = new StoreManager({
+  manager = makeStoreManager({
     workspaceId: crypto.randomUUID(),
     bootstrapFetcher: vi.fn(),
   });

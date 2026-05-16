@@ -16,6 +16,7 @@ import {
   vi,
   type MockedFunction,
 } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import { StoreManager } from "@sync-engine/StoreManager";
 import { MemoryAdapter } from "@sync-engine/MemoryAdapter";
 import { BaseModel } from "@sync-engine/BaseModel";
@@ -67,7 +68,7 @@ async function makeManager(
         models: {},
       };
     });
-  const manager = new StoreManager({
+  const manager = makeStoreManager({
     workspaceId: crypto.randomUUID(),
     bootstrapFetcher,
     storageAdapter: adapter,
@@ -252,7 +253,7 @@ describe("activateSyncGroup()", () => {
   it("reconnects SSE with the activated group in the URL", async () => {
     const { factory, urls } = recordingSSEFactory();
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -292,7 +293,7 @@ describe("activateSyncGroup()", () => {
         }
         return { lastSyncId: 500, subscribedSyncGroups: [], models: {} };
       });
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher,
       storageAdapter: adapter,
@@ -387,7 +388,7 @@ describe("activateSyncGroup() with fetch: false", () => {
 
   it("still reconnects SSE after subscribing", async () => {
     const { factory, urls } = recordingSSEFactory();
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -443,7 +444,7 @@ describe("activateSyncGroup() with ephemeral: true", () => {
   it("still reconnects SSE with the group in the URL", async () => {
     const { factory, urls } = recordingSSEFactory();
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -517,7 +518,7 @@ describe("deactivateSyncGroup()", () => {
   it("reconnects SSE without the deactivated group in the URL", async () => {
     const { factory, urls } = recordingSSEFactory();
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,

@@ -158,20 +158,22 @@ export default function Providers({ children }) {
     <SyncProvider
       config={{
         workspaceId: "workspace-123",
-        bootstrapFetcher: async (type, options) => {
-          const since = options?.sinceSyncId ?? 0;
-          const res = await fetch(`/api/bootstrap?type=${type}&since=${since}`);
-          return res.json();
+        transport: {
+          bootstrapFetcher: async (type, options) => {
+            const since = options?.sinceSyncId ?? 0;
+            const res = await fetch(`/api/bootstrap?type=${type}&since=${since}`);
+            return res.json();
+          },
+          transactionSender: async (batch) => {
+            const res = await fetch("/api/transactions", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(batch),
+            });
+            return res.json();
+          },
+          syncUrl: "/api/events",
         },
-        transactionSender: async (batch) => {
-          const res = await fetch("/api/transactions", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(batch),
-          });
-          return res.json();
-        },
-        syncUrl: "/api/events",
       }}
       fallback={<div>Loading...</div>}
     >
@@ -228,11 +230,13 @@ import "./models";
 
 const sm = new StoreManager({
   workspaceId: "agent-1",
-  bootstrapFetcher,
-  transactionSender,
-  syncUrl: "http://localhost:8081/api/events",
-  sseClientFactory: (url) => new EventSource(url),
-  storageAdapter: new MemoryAdapter(),
+  transport: {
+    bootstrapFetcher,
+    transactionSender,
+    syncUrl: "http://localhost:8081/api/events",
+    sseClientFactory: (url) => new EventSource(url),
+  },
+  persistence: { storageAdapter: new MemoryAdapter() },
 });
 
 await sm.bootstrap();

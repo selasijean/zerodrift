@@ -16,9 +16,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <SyncProvider
       config={{
         workspaceId: WORKSPACE_ID,
-        bootstrapFetcher,
-        transactionSender,
-        syncUrl: `${SSE_URL}/api/events`,
+        transport: {
+          bootstrapFetcher,
+          transactionSender,
+          syncUrl: `${SSE_URL}/api/events`,
+        },
       }}
       fallback={
         <div style={{ padding: 40, textAlign: "center", color: "#888" }}>

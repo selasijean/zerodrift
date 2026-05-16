@@ -6,6 +6,7 @@ import {
   afterEach,
   vi,
 } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import { StoreManager, type BootstrapResponse } from "@sync-engine/StoreManager";
 import { TestTask, TestProject, addToPool } from "./fixtures";
 
@@ -18,7 +19,7 @@ const emptyBootstrapResponse: BootstrapResponse = {
 let manager: StoreManager;
 
 beforeEach(async () => {
-  manager = new StoreManager({
+  manager = makeStoreManager({
     workspaceId: crypto.randomUUID(),
     bootstrapFetcher: vi.fn(async () => emptyBootstrapResponse),
   });

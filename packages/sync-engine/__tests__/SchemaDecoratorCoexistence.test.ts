@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import {
   compileSchema,
   createStore,
@@ -65,7 +66,7 @@ let db: ReturnType<typeof createStore<typeof coexSchema>>;
 
 beforeEach(async () => {
   BaseModel.storeManager = null;
-  sm = new StoreManager({
+  sm = makeStoreManager({
     workspaceId: crypto.randomUUID(),
     storageAdapter: new MemoryAdapter(),
     bootstrapFetcher: vi.fn().mockResolvedValue({

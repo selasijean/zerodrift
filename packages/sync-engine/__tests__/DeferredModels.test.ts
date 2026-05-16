@@ -16,6 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import { StoreManager } from "@sync-engine/StoreManager";
 import { BootstrapType } from "@sync-engine/Database";
 import { MemoryAdapter } from "@sync-engine/MemoryAdapter";
@@ -52,7 +53,7 @@ async function makeManager(
     .mockResolvedValueOnce(phase1Response)
     .mockResolvedValueOnce(phase2Response);
 
-  const manager = new StoreManager({
+  const manager = makeStoreManager({
     workspaceId: crypto.randomUUID(),
     bootstrapFetcher,
     storageAdapter: adapter,

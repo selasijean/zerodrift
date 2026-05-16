@@ -34,6 +34,14 @@ export type {
   BootstrapFetcher,
   BootstrapFetcherOptions,
   StoreManagerConfig,
+  TransportConfig,
+  LoadingConfig,
+  PersistenceConfig,
+  HooksConfig,
+  AdvancedConfig,
+  OnDemandConfig,
+  OnDemandFetcher,
+  OnDemandBatchFetcher,
 } from "./StoreManager";
 
 // Collection runtime objects

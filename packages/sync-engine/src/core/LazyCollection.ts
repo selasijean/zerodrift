@@ -320,7 +320,7 @@ export class RefCollection<
 
   /**
    * Resolve items already in the ObjectPool synchronously.
-   * Used for instant-load models where everything is in memory after bootstrap.
+   * Used for eager-load models where everything is in memory after bootstrap.
    */
   resolveFromPool(pool: { getAll(name: string): BaseModel[] }): T[] {
     if (pool == null || this.parentId === "") {

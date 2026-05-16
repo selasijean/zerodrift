@@ -139,276 +139,272 @@ export interface ModelStreamConfig {
   transform?: ModelStreamMessageTransform;
 }
 
-export interface StoreManagerConfig<TContext = unknown> {
-  workspaceId: string;
+export type OnDemandFetcher = (
+  modelName: string,
+  indexKey: string,
+  value: string,
+) => Promise<Record<string, unknown>[]>;
+
+export type OnDemandBatchFetcher = (
+  modelName: string,
+  ids: string[],
+) => Promise<Record<string, unknown>[]>;
+
+/**
+ * On-demand (progressive) loading strategy for `Partial` / `Lazy` models.
+ * A discriminated union so an index-batch backend can't be half-configured
+ * — the old flat shape let `serverSupportsCompoundIndexKeys` be set without
+ * an `onDemandIndexBatchFetcher`, which silently did nothing.
+ *
+ * - `perKey`: `fetch(modelName, indexKey, value)` is called the first time a
+ *   collection/index is accessed; `batchFetch` coalesces missing id lookups
+ *   for `getByIds`. Supply either or both (they drive different reads —
+ *   `getByIndex` vs `getByIds`). Results are written to IDB + hydrated.
+ * - `indexBatch`: concurrent `getByIndex` calls (incl. `coveringIndexes`
+ *   fan-out) coalesce into one `fetch` per microtask. `compound` opts in to
+ *   dotted server-side-join index keys; `threshold` overrides
+ *   {@link COMPOUND_FETCH_THRESHOLD}.
+ */
+export type OnDemandConfig =
+  | { mode: "perKey"; fetch?: OnDemandFetcher; batchFetch?: OnDemandBatchFetcher }
+  | {
+      mode: "indexBatch";
+      fetch: IndexBatchFetcher;
+      compound?: { threshold?: number };
+    };
+
+export interface TransportConfig {
   bootstrapFetcher: BootstrapFetcher;
   transactionSender?: TransactionSender;
   syncUrl?: string;
-
   /**
    * Optional async hook that returns the user's sync-group memberships
    * before any bootstrap fetch runs. The returned groups are append-only
    * unioned with `dbMeta.subscribedSyncGroups` (so a stale persisted set
    * never shrinks the live one) and persisted, so every downstream
-   * `bootstrapFetcher` call — Phase 1, Phase 2 deferred, newly-added-models
-   * follow-up, and `getOrLoadAll` — can pass `syncGroups` from a single
-   * canonical source rather than relying on the server inferring scope
-   * from auth/session. Fires after the storage adapter connects but before
-   * the bootstrap type is determined, so the seeded groups can also
-   * influence Full vs Partial selection. Failure is fatal — bootstrap
-   * cannot safely proceed without scope. Return `[]` (or omit the hook)
-   * if the server is the source of truth for scope.
+   * `bootstrapFetcher` call can pass `syncGroups` from one canonical source
+   * rather than relying on the server inferring scope from auth/session.
+   * Fires after the storage adapter connects but before the bootstrap type
+   * is determined, so seeded groups can influence Full vs Partial. Failure
+   * is fatal. Return `[]` (or omit) if the server owns scope.
    */
   bootstrapSyncGroups?: () => Promise<string[]>;
-
   /** Secondary model update streams (e.g. a calculation service). */
   modelStreams?: ModelStreamConfig[];
-
   /**
-   * Custom SSE client factory. Defaults to the browser's built-in EventSource.
-   * Override to use the engine outside the browser — e.g. in Node.js or an agent:
-   *
-   *   import EventSource from "eventsource";
-   *   sseClientFactory: (url) => new EventSource(url)
-   *
-   * When set, `sseInit` is ignored — your factory is responsible for any options.
+   * Custom SSE client factory. Defaults to the browser's `EventSource`.
+   * Override to run outside the browser (Node/agent):
+   * `sseClientFactory: (url) => new EventSource(url)`. When set, `sseInit`
+   * is ignored — your factory owns any options.
    */
   sseClientFactory?: SSEClientFactory;
-
   /**
-   * Init options forwarded to the default browser EventSource (e.g. cookie auth):
-   *
-   *   sseInit: { withCredentials: true }
-   *
-   * Applies to the main sync stream and every entry in `modelStreams`. Ignored
-   * when `sseClientFactory` is set.
+   * Init options forwarded to the default browser EventSource (e.g.
+   * `{ withCredentials: true }`). Applies to the main stream and every
+   * `modelStreams` entry. Ignored when `sseClientFactory` is set.
    */
   sseInit?: EventSourceInit;
-
   /**
    * Use when the backend sends a different envelope than the canonical
    * `DeltaPacket`. Return null to drop a message.
    */
   syncTransform?: SyncMessageTransform;
+}
 
-  /**
-   * Custom storage backend. Defaults to IndexedDB (`Database`).
-   * Override for environments without IndexedDB — e.g. Node.js agents:
-   *
-   *   import { MemoryAdapter } from "./MemoryAdapter";
-   *   storageAdapter: new MemoryAdapter()
-   *
-   * Implement `StorageAdapter` to plug in SQLite, Redis, or any other backend.
-   * If omitted, `Database` is used and gracefully falls back to in-memory when
-   * IndexedDB is unavailable (no crash, but no persistence across restarts).
-   */
-  storageAdapter?: StorageAdapter;
-
-  /**
-   * Maximum number of undo entries kept in memory. Defaults to 100.
-   * Lower this for long-running agents that make many writes and don't need
-   * deep undo history (each entry holds model snapshots).
-   */
-  undoLimit?: number;
-
+export interface LoadingConfig {
   /**
    * How deep `RefCollection`s walk the parent's outgoing FK chain when
-   * auto-deriving covering axes (denormalization detection). Defaults to 3,
-   * matching Linear. Set to 1 to only consider the parent's direct FKs;
-   * set to 0 to disable auto-derivation entirely (manual `coveringIndexes`
-   * decorator option still applies). Higher values exponentially increase
-   * the registry-walk surface and produce diminishing returns.
+   * auto-deriving covering axes. Defaults to 3 (matching Linear). 1 = only
+   * the parent's direct FKs; 0 = disable auto-derivation (manual
+   * `coveringIndexes` still applies). Higher values exponentially increase
+   * the registry-walk surface for diminishing returns.
    */
   transientIndexDepth?: number;
-
   /**
-   * Two-phase full bootstrap. If provided, the first fetch loads only
-   * the critical models (everything NOT in this list). Once hydrated
-   * and the UI is interactive, a second background fetch loads these
-   * deferred models. The first fetch loads critical models (e.g.
-   * Issue/Team/User) and the second loads the rest (e.g. Comment/Reaction/Attachment).
-   *
-   * If not provided, all models are fetched in a single request.
+   * Two-phase full bootstrap. If provided, the first fetch loads only the
+   * critical models (everything NOT in this list); once interactive, a
+   * background fetch loads these. If omitted, all models load in one
+   * request.
    */
   deferredModels?: string[];
-
   /**
-   * Progressive / on-demand loading. When provided, models with
-   * Partial/Lazy load strategies are NOT included
-   * in the bootstrap fetch. Instead, the first time a collection is
-   * accessed (e.g. issue.comments.load()), this fetcher is called with
-   * the scoped query. Results are written to IDB and hydrated into the
-   * pool, so subsequent accesses are served locally.
-   *
-   * SSE deltas still write to IDB for these model types, but new
-   * inserts are only hydrated into the pool if the relevant collection
-   * has already been loaded for that parent.
+   * Progressive / on-demand loading for `Partial` / `Lazy` models — they're
+   * excluded from bootstrap and fetched on first access, written to IDB,
+   * and hydrated. See {@link OnDemandConfig}.
    */
-  onDemandFetcher?: (
-    modelName: string,
-    indexKey: string,
-    value: string,
-  ) => Promise<Record<string, unknown>[]>;
+  onDemand?: OnDemandConfig;
+}
 
-  /** Batch ID lookup used by getOrLoadByIds — receives all missing IDs at once so
-   * the caller can make a single server request instead of one per ID. */
-  onDemandBatchFetcher?: (
-    modelName: string,
-    ids: string[],
-  ) => Promise<Record<string, unknown>[]>;
-
+export interface PersistenceConfig {
   /**
-   * Batched index-query fetcher. When provided, concurrent
-   * `getOrLoadCollection(modelName, indexKey, value)` calls — including the per-axis
-   * fan-out a `coveringIndexes` collection produces — coalesce into a single
-   * call within one microtask. Identical triples dedupe; the server returns a
-   * map keyed by model name; the loader splits each model's records back to
-   * the originating waiters by FK match.
-   *
-   * If omitted, each getOrLoadCollection still calls `onDemandFetcher` per triple
-   * (existing behavior).
+   * Custom storage backend. Defaults to IndexedDB (`Database`). Override
+   * for environments without IndexedDB (`new MemoryAdapter()`), or
+   * implement `StorageAdapter` for SQLite/Redis/etc. If omitted, `Database`
+   * falls back to in-memory when IndexedDB is unavailable (no persistence
+   * across restarts, no crash).
    */
-  onDemandIndexBatchFetcher?: IndexBatchFetcher;
-
+  storageAdapter?: StorageAdapter;
   /**
-   * Adopter-side opt-in: the configured `onDemandIndexBatchFetcher` (and
-   * server) accepts dotted `indexKey` paths like `"issueId.cycleId"`,
-   * resolving them via a server-side join. When set, the engine examines
-   * each batched fetch and — if ≥ COMPOUND_FETCH_THRESHOLD pending requests
-   * share a parent FK value — replaces them with a single compound query
-   * `Comment[issueId.cycleId=X]`. The response is a superset; per-waiter
-   * filtering (already in `BatchModelLoader`) narrows to each direct triple.
-   *
-   * Default `false` — backends without JOIN support keep per-parent
-   * fan-out.
+   * Maximum undo entries kept in memory. Defaults to 100. Lower it for
+   * long-running agents that make many writes and don't need deep history
+   * (each entry holds model snapshots).
    */
-  serverSupportsCompoundIndexKeys?: boolean;
+  undoLimit?: number;
+}
 
-  /**
-   * Minimum number of pending requests sharing a parent FK value before
-   * the engine collapses them into a single compound query. Below this,
-   * the per-parent fan-out wins because the compound response would
-   * over-fetch. Only consulted when `serverSupportsCompoundIndexKeys` is
-   * true. Defaults to {@link COMPOUND_FETCH_THRESHOLD}.
-   */
-  compoundIndexFetchThreshold?: number;
-
+export interface HooksConfig<TContext = unknown> {
   onPhaseChange?: (phase: BootstrapPhase, detail?: string) => void;
   onDeltaPacket?: (packet: DeltaPacket) => void;
   onReady?: () => void;
-
   /**
-   * Single hook for every async failure the engine catches internally —
-   * eager loads, SSE parse errors, transaction send retries, deferred bootstrap
-   * fetches, etc. Adopters typically wire this into Sentry/Datadog/console.
-   *
-   * Receives the error and a tagged-union `EngineErrorContext` describing the
-   * failure site. Throwing from inside the handler is swallowed (it can't break
-   * the engine). Without this hook every internal failure is silently dropped.
+   * Single hook for every async failure the engine catches internally
+   * (eager loads, SSE parse errors, transaction retries, deferred fetches).
+   * Receives the error and a tagged-union `EngineErrorContext`. Throwing
+   * from it is swallowed. Without it, internal failures are silently
+   * dropped.
    */
   onError?: EngineErrorHandler;
-
   /**
-   * Called when a sync group is removed — by `deactivateSyncGroup` or by an
-   * SSE delta carrying `removedSyncGroups`. The engine has already updated
-   * `dbMeta.subscribedSyncGroups` by the time this fires; SSE reconnect waits
-   * for the returned promise.
-   *
-   * Use it to evict pool/IDB records belonging to the group. The `sm` argument
-   * exposes `evictByIndex` / `evictWhere` helpers, the `objectPool`, the
-   * `database` adapter, and `ModelRegistry` is importable from the package
-   * if you want to walk every registered model.
+   * Called when a sync group is removed (`deactivateSyncGroup` or an SSE
+   * `removedSyncGroups`). `dbMeta.subscribedSyncGroups` is already updated;
+   * SSE reconnect waits for the returned promise. Use it to evict pool/IDB
+   * records — `sm` exposes `evictByIndex` / `evictWhere`, `objectPool`,
+   * `database`.
    */
   onSyncGroupDelete?: (
     groupId: string,
     sm: StoreManager<TContext>,
   ) => void | Promise<void>;
+}
 
+export interface AdvancedConfig<TContext = unknown> {
   /**
-   * Mint the `id` for newly-constructed client-side models. Called from
-   * BaseModel's id initializer; not invoked for records hydrated from the
-   * server or from IndexedDB (those carry their own ids).
-   *
-   * Receives the live context most recently set via `setContext` (or the
-   * SyncProvider `context` prop). Context is `undefined` until the consumer
-   * sets it — guard accordingly if your scheme requires user/tenant info.
-   *
-   * Defaults to `crypto.randomUUID()` when omitted.
+   * Mint the `id` for newly-constructed client-side models. Not invoked for
+   * server/IDB-hydrated records. Receives the live context from
+   * `setContext` (or `<SyncProvider context>`); `undefined` until set.
+   * Defaults to `crypto.randomUUID()`.
    */
   identifierFn?: (meta: ModelMeta, context: TContext | undefined) => string;
-
   /**
-   * Stamp a field transform onto each `(model, property)` pair at engine
-   * init. Walks every registered model exactly once; called per property,
-   * returning the transform to install or `undefined` for "no transform."
-   *
-   * The transform fires inside the property setter — `model.field = x` —
-   * before the value reaches the MobX box. It receives the assigned value,
-   * the model instance (so it can read sibling fields), and the live
-   * context. Use it to canonicalize cross-cutting input formats — e.g.
-   * prefix every FK with the current layer/tenant, normalize strings —
-   * without sprinkling per-field decorators across every model.
-   *
-   * Storage is per-StoreManager: rebuilding the engine swaps the rules
-   * cleanly, no global registry mutation.
+   * Stamp a field transform onto each `(model, property)` at engine init
+   * (walked once). The transform fires inside the property setter before
+   * the MobX box, receiving the value, instance, and live context — use it
+   * to canonicalize cross-cutting input (tenant-prefix FKs, normalize
+   * strings) without per-field decorators. Per-StoreManager storage.
    */
   applyFieldTransforms?: (
     meta: ModelMeta,
     prop: PropertyMeta,
   ) => FieldTransform<TContext> | undefined;
-
   /**
-   * Route user-initiated commits before they hit the pool / transaction queue.
-   * Fires from `commitCreate` (before pool insert + enqueue) and
-   * `commitUpdate` (before enqueue). Returning `"skip"` suppresses the
-   * original op. Returning a redirect asks the engine to replay the intent
-   * against a different model id, optionally restoring the originally edited
-   * model's boxes to their pre-edit values.
-   *
-   * Delta-driven hydrates and SSE inserts do NOT fire this hook; it's
-   * scoped to user/agent writes that flow through `BaseModel.save()` or
-   * direct `commitCreate` calls.
-   *
-   * Pair with `materializePoolOnly` / `clonePoolOnly` when the redirect target
-   * is a pool-only optimistic mirror (e.g. draft layers waiting on a server
-   * fork-fetch).
+   * Route user-initiated commits before they hit the pool / queue. Fires
+   * from `commitCreate` (before pool insert + enqueue) and `commitUpdate`
+   * (before enqueue). `"skip"` suppresses; a redirect replays the intent
+   * against a different model id (optionally restoring the original's
+   * pre-edit boxes). Delta/SSE writes do NOT fire this. Pair with
+   * `materializePoolOnly` / `clonePoolOnly` for pool-only redirect targets.
    */
   routeCommit?: CommitRouteHandler;
-
   /**
-   * Fired the instant a clean model becomes dirty — its first pending change
-   * since the last save/discard — synchronously inside the property setter,
-   * before any `save()`. Use it for eager side-effects that must not wait for
-   * a commit: e.g. materializing a draft-layer scaffold (`materializePoolOnly`)
-   * the moment the user touches a default-layer object, so the UI can switch
-   * to the draft immediately. The actual write is still routed at `save()`
-   * via `routeCommit` — keep the two split (this builds the redirect target;
-   * `routeCommit` diverts the write onto it).
-   *
-   * Runs on the setter hot path: keep it fast, or defer heavy work yourself
-   * (mind that a synchronous `save()` in the same tick would then outrun it,
-   * and `routeCommit`'s missing-target path drops the write).
-   *
-   * NOT fired during the engine's own redirect replay, nor for delta-driven
-   * hydrates / SSE inserts (those bypass the setter).
+   * Fired the instant a clean model becomes dirty (first pending change
+   * since last save/discard), synchronously inside the setter before any
+   * `save()`. For eager side-effects that must not wait for a commit (e.g.
+   * materializing a draft-layer scaffold). The write is still routed at
+   * `save()` via `routeCommit`. Runs on the setter hot path — keep it fast.
+   * NOT fired during redirect replay or delta/SSE hydrates.
    */
   onModelTouched?: OnModelTouchedHandler;
-
   /**
-   * Hooks for undoing/redoing remote side-effects committed via non-model APIs
-   * (bulk-mutation endpoints, server-side workflow runs, etc.). The engine
-   * tracks these on the same undo stack as model transactions; when the user
-   * hits undo, it calls `undoableActions.undo` with the recorded
-   * `UndoableAction` and lets the consumer make the compensating API call.
-   *
-   * Each handler returns the compensating `UndoableAction` so the engine can
-   * place it on the opposite stack. Returning `void` is fine when the same
-   * `changeLogId` is replayable in either direction.
-   *
-   * Wire `StoreManager.runUndoable(fn)` in your code wherever you call such
-   * an API. Failures are surfaced through `onError` with `kind: "undoableAction"`.
+   * Hooks for undoing/redoing remote side-effects committed via non-model
+   * APIs (bulk endpoints, server workflows). Tracked on the same undo stack
+   * as model transactions; on undo the engine calls `undoableActions.undo`
+   * with the recorded `UndoableAction`. Each handler returns the
+   * compensating action (or `void` if symmetric). Wire
+   * `StoreManager.runUndoable(fn)` at the call site. Failures route to
+   * `onError` with `kind: "undoableAction"`.
    */
   undoableActions?: UndoableActionHandlers;
+}
+
+/**
+ * Public engine config, grouped by concern. `transport` is required
+ * (carries the required `bootstrapFetcher`); the rest are optional.
+ */
+export interface StoreManagerConfig<TContext = unknown> {
+  workspaceId: string;
+  transport: TransportConfig;
+  loading?: LoadingConfig;
+  persistence?: PersistenceConfig;
+  hooks?: HooksConfig<TContext>;
+  advanced?: AdvancedConfig<TContext>;
+}
+
+/**
+ * @internal Flattened shape the engine reads internally. The public grouped
+ * `StoreManagerConfig` is normalized into this exactly once (constructor),
+ * so the rest of the engine collapses to one stable surface. Exported only
+ * for the test factory.
+ *
+ * Derived structurally from the grouped sub-interfaces (minus `onDemand`,
+ * which the discriminated union expands into the flat `onDemand*` fields
+ * below) so the "flat = projection of grouped" invariant is compiler-
+ * enforced — rename a field in one place and this follows automatically.
+ */
+export type NormalizedConfig<TContext = unknown> = Omit<
+  TransportConfig &
+    LoadingConfig &
+    PersistenceConfig &
+    HooksConfig<TContext> &
+    AdvancedConfig<TContext>,
+  "onDemand"
+> & {
+  workspaceId: string;
+  onDemandFetcher?: OnDemandFetcher;
+  onDemandBatchFetcher?: OnDemandBatchFetcher;
+  onDemandIndexBatchFetcher?: IndexBatchFetcher;
+  serverSupportsCompoundIndexKeys?: boolean;
+  compoundIndexFetchThreshold?: number;
+};
+
+/** @internal Grouped public config → flat internal config. Single mapping
+ * point; the discriminated `onDemand` union expands to the legacy flat
+ * onDemand* fields here. */
+export function normalizeConfig<TContext = unknown>(
+  c: StoreManagerConfig<TContext>,
+): NormalizedConfig<TContext> {
+  const od = c.loading?.onDemand;
+  return {
+    workspaceId: c.workspaceId,
+    bootstrapFetcher: c.transport.bootstrapFetcher,
+    transactionSender: c.transport.transactionSender,
+    syncUrl: c.transport.syncUrl,
+    bootstrapSyncGroups: c.transport.bootstrapSyncGroups,
+    modelStreams: c.transport.modelStreams,
+    sseClientFactory: c.transport.sseClientFactory,
+    sseInit: c.transport.sseInit,
+    syncTransform: c.transport.syncTransform,
+    storageAdapter: c.persistence?.storageAdapter,
+    undoLimit: c.persistence?.undoLimit,
+    transientIndexDepth: c.loading?.transientIndexDepth,
+    deferredModels: c.loading?.deferredModels,
+    onDemandFetcher: od?.mode === "perKey" ? od.fetch : undefined,
+    onDemandBatchFetcher: od?.mode === "perKey" ? od.batchFetch : undefined,
+    onDemandIndexBatchFetcher: od?.mode === "indexBatch" ? od.fetch : undefined,
+    serverSupportsCompoundIndexKeys:
+      od?.mode === "indexBatch" ? od.compound != null : undefined,
+    compoundIndexFetchThreshold:
+      od?.mode === "indexBatch" ? od.compound?.threshold : undefined,
+    onPhaseChange: c.hooks?.onPhaseChange,
+    onDeltaPacket: c.hooks?.onDeltaPacket,
+    onReady: c.hooks?.onReady,
+    onError: c.hooks?.onError,
+    onSyncGroupDelete: c.hooks?.onSyncGroupDelete,
+    identifierFn: c.advanced?.identifierFn,
+    applyFieldTransforms: c.advanced?.applyFieldTransforms,
+    routeCommit: c.advanced?.routeCommit,
+    onModelTouched: c.advanced?.onModelTouched,
+    undoableActions: c.advanced?.undoableActions,
+  };
 }
 
 /**
@@ -430,7 +426,7 @@ export class StoreManager<TContext = unknown> {
   private stores = new Map<string, ModelStore>();
   private syncConnection: SyncConnection | null = null;
   private modelStreams: ModelStream[] = [];
-  private config: StoreManagerConfig<TContext>;
+  private config: NormalizedConfig<TContext>;
   private context: TContext | undefined = undefined;
   private fieldTransforms = new Map<string, FieldTransform<TContext>>();
   hasFieldTransforms = false;
@@ -496,42 +492,42 @@ export class StoreManager<TContext = unknown> {
   private suppressUserIntentHooks = false;
 
   constructor(config: StoreManagerConfig<TContext>) {
-    this.config = config;
+    const c = normalizeConfig(config);
+    this.config = c;
     this.objectPool = new ObjectPool();
-    this.database = config.storageAdapter ?? new Database(config.workspaceId);
+    this.database = c.storageAdapter ?? new Database(c.workspaceId);
     this.transactionQueue = new TransactionQueue(
       this.database,
       this.objectPool,
-      config.undoLimit,
+      c.undoLimit,
     );
-    if (config.transactionSender != null) {
-      this.transactionQueue.setSender(config.transactionSender);
+    if (c.transactionSender != null) {
+      this.transactionQueue.setSender(c.transactionSender);
     }
     this.transactionQueue.setErrorReporter((err, ctx) =>
       this.emitError(err, ctx),
     );
-    if (config.undoableActions != null) {
-      this.transactionQueue.setActionHandlers(config.undoableActions);
+    if (c.undoableActions != null) {
+      this.transactionQueue.setActionHandlers(c.undoableActions);
     }
-    if (config.onDemandIndexBatchFetcher != null) {
+    if (c.onDemandIndexBatchFetcher != null) {
       const fetcher =
-        config.serverSupportsCompoundIndexKeys === true
+        c.serverSupportsCompoundIndexKeys === true
           ? wrapCompoundFetcher(
-              config.onDemandIndexBatchFetcher,
+              c.onDemandIndexBatchFetcher,
               this.objectPool,
               {
                 threshold:
-                  config.compoundIndexFetchThreshold ??
-                  COMPOUND_FETCH_THRESHOLD,
+                  c.compoundIndexFetchThreshold ?? COMPOUND_FETCH_THRESHOLD,
                 onCompoundFetched: (compound, bag) =>
                   this.absorbCompoundResponse(compound, bag),
               },
             )
-          : config.onDemandIndexBatchFetcher;
+          : c.onDemandIndexBatchFetcher;
       this.indexBatchLoader = new BatchModelLoader(fetcher);
     }
-    if (config.applyFieldTransforms != null) {
-      const apply = config.applyFieldTransforms;
+    if (c.applyFieldTransforms != null) {
+      const apply = c.applyFieldTransforms;
       for (const meta of ModelRegistry.allModels()) {
         for (const prop of meta.properties.values()) {
           const t = apply(meta, prop);
@@ -545,7 +541,7 @@ export class StoreManager<TContext = unknown> {
       }
       this.hasFieldTransforms = this.fieldTransforms.size > 0;
     }
-    this.hasModelTouchedHandler = config.onModelTouched != null;
+    this.hasModelTouchedHandler = c.onModelTouched != null;
     BaseModel.storeManager = this; // wire auto-commit
   }
 
@@ -796,11 +792,11 @@ export class StoreManager<TContext = unknown> {
    */
   private async fullBootstrap() {
     const deferred = new Set(this.config.deferredModels ?? []);
-    const instantModels = ModelRegistry.instantModelNames();
+    const eagerModels = ModelRegistry.eagerModelNames();
 
     if (deferred.size > 0) {
       // Phase 1: critical Eager models only
-      const criticalModels = instantModels.filter(
+      const criticalModels = eagerModels.filter(
         (name) => !deferred.has(name),
       );
       this.setPhase(
@@ -827,7 +823,7 @@ export class StoreManager<TContext = unknown> {
 
       // Phase 2: deferred models — runs AFTER bootstrap() returns and the
       // engine is marked ready. The UI is already interactive at this point.
-      const deferredModels = instantModels.filter((name) => deferred.has(name));
+      const deferredModels = eagerModels.filter((name) => deferred.has(name));
       if (deferredModels.length > 0) {
         this.fetchDeferredModels(deferredModels);
       }
@@ -837,7 +833,7 @@ export class StoreManager<TContext = unknown> {
       // (or never) and don't belong in a bootstrap payload.
       this.setPhase(BootstrapPhase.Fetching, "full");
       const res = await this.config.bootstrapFetcher(BootstrapType.Full, {
-        onlyModels: instantModels,
+        onlyModels: eagerModels,
         syncGroups: this.subscribedSyncGroupsForFetch(),
         currentMeta: this.database.currentMeta,
       });
@@ -1504,7 +1500,7 @@ export class StoreManager<TContext = unknown> {
   /**
    * Called by SyncConnection when new sync groups are added.
    * Fetches all models scoped to those groups from the server,
-   * writes to IDB, and hydrates instant-load ones into the pool.
+   * writes to IDB, and hydrates eager-load ones into the pool.
    *
    * Example: user joins team "t-design" → fetch all Issues, Comments,
    * etc. that belong to that team.
@@ -1571,7 +1567,7 @@ export class StoreManager<TContext = unknown> {
     try {
       res = await this.config.bootstrapFetcher(BootstrapType.Full, {
         syncGroups: groups,
-        onlyModels: ModelRegistry.instantModelNames(),
+        onlyModels: ModelRegistry.eagerModelNames(),
         currentMeta: dbMeta,
       });
     } catch (err) {
@@ -1610,8 +1606,8 @@ export class StoreManager<TContext = unknown> {
    * additions are silently dropped — they load on demand or not at all.
    */
   private async fetchNewlyAddedModels(modelNames: string[]): Promise<void> {
-    const instant = new Set(ModelRegistry.instantModelNames());
-    const targets = modelNames.filter((name) => instant.has(name));
+    const eager = new Set(ModelRegistry.eagerModelNames());
+    const targets = modelNames.filter((name) => eager.has(name));
     if (targets.length === 0) {
       return;
     }
@@ -1636,7 +1632,7 @@ export class StoreManager<TContext = unknown> {
     await Promise.all(
       Object.entries(res.models).map(async ([modelName, records]) => {
         await this.database.writeModels(modelName, records);
-        this.hydrateInstantModels(modelName, records);
+        this.hydrateEagerModels(modelName, records);
       }),
     );
     await this.applyDeletedIds(res);
@@ -1646,7 +1642,7 @@ export class StoreManager<TContext = unknown> {
    * Write records for Eager models into the pool. Updates existing instances
    * in-place; creates new ones via hydrateAndPut for models not yet in memory.
    */
-  private hydrateInstantModels(
+  private hydrateEagerModels(
     modelName: string,
     records: Record<string, unknown>[],
   ): void {

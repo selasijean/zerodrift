@@ -110,7 +110,7 @@ class ModelRegistryImpl {
   /** Names of every Eager-load-strategy model. Lazy / Partial /
    * LocalOnly / Ephemeral models are loaded on demand or
    * via SSE — never via a full-bootstrap payload. */
-  instantModelNames(): string[] {
+  eagerModelNames(): string[] {
     const out: string[] = [];
     for (const meta of this.models.values()) {
       if (meta.loadStrategy === LoadStrategy.Eager) {

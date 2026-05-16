@@ -66,27 +66,30 @@ This two-step completion ensures the client never gets ahead of its own confirma
 
 ## Routing commits: `routeCommit`
 
-Wire `StoreManagerConfig.routeCommit` to inspect, suppress, or redirect user-initiated commits before they hit the pool or transaction queue. The hook fires from `commitCreate` (before pool insert + enqueue) and `commitUpdate` (before enqueue), with a discriminated `CommitIntent`:
+Wire `advanced.routeCommit` to inspect, suppress, or redirect user-initiated commits before they hit the pool or transaction queue. The hook fires from `commitCreate` (before pool insert + enqueue) and `commitUpdate` (before enqueue), with a discriminated `CommitIntent`:
 
 ```ts
 new StoreManager({
-  // ...
-  routeCommit: (op) => {
-    // op: { kind: "create" | "update", model, modelName, [changes, previousData] }
-    if (op.kind === "update" && shouldFork(op.model)) {
-      const before = op.previousData(); // lazy — only serializes if called
-      const [clone] = store.materializePoolOnly("Object", [{
-        ...before,
-        id: draftId(op.model.id),
-        layerId: "draft",
-      }]);
-      return {
-        action: "redirect",
-        modelId: clone.id,
-        restoreOriginal: true,
-      };
-    }
-    // returning void lets the engine continue normally
+  workspaceId,
+  transport: { bootstrapFetcher },
+  advanced: {
+    routeCommit: (op) => {
+      // op: { kind: "create" | "update", model, modelName, [changes, previousData] }
+      if (op.kind === "update" && shouldFork(op.model)) {
+        const before = op.previousData(); // lazy — only serializes if called
+        const [clone] = store.materializePoolOnly("Object", [{
+          ...before,
+          id: draftId(op.model.id),
+          layerId: "draft",
+        }]);
+        return {
+          action: "redirect",
+          modelId: clone.id,
+          restoreOriginal: true,
+        };
+      }
+      // returning void lets the engine continue normally
+    },
   },
 });
 ```
@@ -103,21 +106,25 @@ Delta-driven hydrates and SSE inserts do NOT fire this hook — it's scoped to w
 
 ### Materializing earlier: `onModelTouched`
 
-`routeCommit` fires at `save()` — the only point with a complete, clean change set. But sometimes you need a side-effect *before* the commit: e.g. the UI should flip to a draft layer the instant the user starts editing, not after a debounced/explicit save. `StoreManagerConfig.onModelTouched` fires synchronously inside the property setter, on the **clean→dirty transition** (a model's first pending change since its last save/discard):
+`routeCommit` fires at `save()` — the only point with a complete, clean change set. But sometimes you need a side-effect *before* the commit: e.g. the UI should flip to a draft layer the instant the user starts editing, not after a debounced/explicit save. `advanced.onModelTouched` fires synchronously inside the property setter, on the **clean→dirty transition** (a model's first pending change since its last save/discard):
 
 ```ts
 new StoreManager({
-  onModelTouched: (model, modelName) => {
-    if (onDefaultLayer(model)) {
-      store.clonePoolOnly(defaultLayerObjects(), (d) => ({
-        ...d, id: draftId(d.id), layerId: "draft",
-      }));                       // build the scaffold up front
-    }
-  },
-  routeCommit: (op) => {
-    if (op.kind === "update" && onDefaultLayer(op.model)) {
-      return { action: "redirect", modelId: draftId(op.model.id), restoreOriginal: true };
-    }
+  workspaceId,
+  transport: { bootstrapFetcher },
+  advanced: {
+    onModelTouched: (model, modelName) => {
+      if (onDefaultLayer(model)) {
+        store.clonePoolOnly(defaultLayerObjects(), (d) => ({
+          ...d, id: draftId(d.id), layerId: "draft",
+        }));                       // build the scaffold up front
+      }
+    },
+    routeCommit: (op) => {
+      if (op.kind === "update" && onDefaultLayer(op.model)) {
+        return { action: "redirect", modelId: draftId(op.model.id), restoreOriginal: true };
+      }
+    },
   },
 });
 ```
@@ -228,19 +235,22 @@ Inside an open `batch()`, the action joins the active batch and undoes alongside
 
 ### Configuring the handlers
 
-The engine itself doesn't know how to undo a `changeLogId` — the consumer does. Wire handlers on `StoreManagerConfig`:
+The engine itself doesn't know how to undo a `changeLogId` — the consumer does. Wire handlers on `advanced.undoableActions`:
 
 ```typescript
 new StoreManager({
-  // ...
-  undoableActions: {
-    undo: async (action) => {
-      const r = await api.changeLog.undo(action.changeLogId);
-      return { ...action, changeLogId: r.compensatingChangeLogId };
-    },
-    redo: async (action) => {
-      const r = await api.changeLog.redo(action.changeLogId);
-      return { ...action, changeLogId: r.compensatingChangeLogId };
+  workspaceId,
+  transport: { bootstrapFetcher },
+  advanced: {
+    undoableActions: {
+      undo: async (action) => {
+        const r = await api.changeLog.undo(action.changeLogId);
+        return { ...action, changeLogId: r.compensatingChangeLogId };
+      },
+      redo: async (action) => {
+        const r = await api.changeLog.redo(action.changeLogId);
+        return { ...action, changeLogId: r.compensatingChangeLogId };
+      },
     },
   },
 });

@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import { StoreManager } from "@sync-engine/StoreManager";
 import { BootstrapType } from "@sync-engine/Database";
 import { MemoryAdapter } from "@sync-engine/MemoryAdapter";
@@ -35,7 +36,7 @@ describe("deletedIds — fullBootstrap", () => {
       deletedIds: { TestTask: ["t-gone"] },
     });
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher,
       storageAdapter: adapter,
@@ -66,7 +67,7 @@ describe("deletedIds — partialBootstrap", () => {
       deletedIds: { TestTask: ["t-tombstone"] },
     });
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher,
       storageAdapter: adapter,
@@ -118,7 +119,7 @@ describe("deletedIds — fetchSyncGroupModels", () => {
         deletedIds: { TestTask: ["t-stale"] },
       }));
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher,
       storageAdapter: adapter,
@@ -151,7 +152,7 @@ describe("deletedIds — missing field is a no-op", () => {
       models: {},
     });
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher,
       storageAdapter: adapter,
@@ -172,7 +173,7 @@ describe("subscribedSyncGroups — fullBootstrap (first-time)", () => {
       models: {},
     });
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher,
       storageAdapter: adapter,
@@ -211,7 +212,7 @@ describe("subscribedSyncGroups — fullBootstrap (re-bootstrap via schema mismat
         backendDatabaseVersion: 1,
       }));
 
-    const sm = new StoreManager({
+    const sm = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher,
       storageAdapter: adapter,
@@ -283,7 +284,7 @@ describe("bootstrapSyncGroups — config hook", () => {
       models: {},
     });
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher,
       bootstrapSyncGroups: async () => ["team-a", "team-b"],
@@ -308,7 +309,7 @@ describe("bootstrapSyncGroups — config hook", () => {
       models: {},
     });
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher,
       // Hook returns a subset of what's persisted.
@@ -346,7 +347,7 @@ describe("bootstrapSyncGroups — config hook", () => {
       models: {},
     });
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher,
       bootstrapSyncGroups: async () => [],
@@ -367,7 +368,7 @@ describe("bootstrapSyncGroups — config hook", () => {
       models: {},
     });
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher,
       bootstrapSyncGroups: async () => {
@@ -390,7 +391,7 @@ describe("subscribedSyncGroups — partialBootstrap", () => {
       models: {},
     });
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher,
       storageAdapter: adapter,

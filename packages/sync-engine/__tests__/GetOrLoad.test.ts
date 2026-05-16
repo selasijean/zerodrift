@@ -14,6 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import { StoreManager } from "@sync-engine/StoreManager";
 import { MemoryAdapter } from "@sync-engine/MemoryAdapter";
 import { BaseModel } from "@sync-engine/BaseModel";
@@ -37,7 +38,7 @@ describe("StoreManager.getOrLoad family", () => {
     const fetcher = vi
       .fn()
       .mockResolvedValue([{ id: "n1", content: "hello", taskId: "t1" }]);
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -66,7 +67,7 @@ describe("StoreManager.getOrLoad family", () => {
         { id: "n2", content: "two", taskId: "t1" },
         { id: "n3", content: "three", taskId: "t1" },
       ]);
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -96,7 +97,7 @@ describe("StoreManager.getOrLoad family", () => {
     const fetcher = vi
       .fn()
       .mockResolvedValue([{ id: "a1", taskId: "t1", text: "x" }]);
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -125,7 +126,7 @@ describe("StoreManager.getOrLoadAll", () => {
       subscribedSyncGroups: [],
       models: { TestNote: [{ id: "n1", content: "x", taskId: "t1" }] },
     });
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: bootstrap,
       storageAdapter: adapter,
@@ -154,7 +155,7 @@ describe("StoreManager.getOrLoadAll", () => {
         : {};
       return { lastSyncId: 0, subscribedSyncGroups: [] as string[], models };
     });
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: bootstrap,
       storageAdapter: adapter,
@@ -186,7 +187,7 @@ describe("StoreManager.getOrLoadAll", () => {
         TestActivity: [{ id: "a-team-A", taskId: "t1", text: "x" }],
       },
     }));
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: bootstrap,
       storageAdapter: adapter,
@@ -225,7 +226,7 @@ describe("StoreManager.getOrLoadAll", () => {
       subscribedSyncGroups: [] as string[],
       models: { TestActivity: [] as Record<string, unknown>[] },
     }));
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: bootstrap,
       storageAdapter: adapter,
@@ -252,7 +253,7 @@ describe("StoreManager.getOrLoadAll", () => {
         TestActivity: [{ id: "a1", taskId: "t1", text: "x" }],
       },
     }));
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: bootstrap,
       storageAdapter: adapter,
@@ -276,7 +277,7 @@ describe("StoreManager.getOrLoadAll", () => {
       subscribedSyncGroups: [] as string[],
       models: { TestActivity: [] as Record<string, unknown>[] },
     }));
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: bootstrap,
       storageAdapter: adapter,
@@ -330,7 +331,7 @@ describe("StoreManager.getOrLoadAll", () => {
           },
         };
       });
-      manager = new StoreManager({
+      manager = makeStoreManager({
         workspaceId: crypto.randomUUID(),
         bootstrapFetcher: bootstrap,
         storageAdapter: adapter,
@@ -381,7 +382,7 @@ describe("StoreManager.getOrLoadAll", () => {
           },
         };
       });
-      manager = new StoreManager({
+      manager = makeStoreManager({
         workspaceId: crypto.randomUUID(),
         bootstrapFetcher: bootstrap,
         storageAdapter: adapter,
@@ -420,7 +421,7 @@ describe("StoreManager.getOrLoadAll", () => {
           models: { TestActivity: [] },
         };
       });
-      manager = new StoreManager({
+      manager = makeStoreManager({
         workspaceId: crypto.randomUUID(),
         bootstrapFetcher: bootstrap,
         storageAdapter: adapter,
@@ -454,7 +455,7 @@ describe("StoreManager.getOrLoadAll", () => {
           },
         };
       });
-      manager = new StoreManager({
+      manager = makeStoreManager({
         workspaceId: crypto.randomUUID(),
         bootstrapFetcher: bootstrap,
         storageAdapter: adapter,
@@ -487,7 +488,7 @@ describe("StoreManager.getOrLoadAll", () => {
         manager.recordInflightDelete("TestActivity", "a-mid");
         throw fail;
       });
-      manager = new StoreManager({
+      manager = makeStoreManager({
         workspaceId: crypto.randomUUID(),
         bootstrapFetcher: bootstrap,
         storageAdapter: adapter,

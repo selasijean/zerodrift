@@ -2,8 +2,9 @@
  * FullStore and PartialStore — per-model stores that sync memory ↔ IndexedDB.
  *
  * StoreManager creates one of these for each registered model:
- *   - FullStore for instant/lazy/local models (all instances at once)
- *   - PartialStore for partial/explicitlyRequested models (on demand)
+ *   - FullStore for eager/lazy/localOnly models (all instances at once)
+ *   - PartialStore for partial models (on demand)
+ *   - EphemeralStore for ephemeral models (pool-only, never persisted)
  */
 
 import type { BaseModel } from "./BaseModel";

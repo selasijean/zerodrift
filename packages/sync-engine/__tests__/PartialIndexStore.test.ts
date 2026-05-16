@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { makeStoreManager } from "./helpers/storeManager";
 import { StoreManager } from "@sync-engine/StoreManager";
 import { MemoryAdapter } from "@sync-engine/MemoryAdapter";
 import { BaseModel } from "@sync-engine/BaseModel";
@@ -26,7 +27,7 @@ describe("Persistent partial-index coverage", () => {
     const fetcher = vi.fn().mockResolvedValue([
       { id: "a1", taskId: "t1", text: "first" },
     ]);
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -54,7 +55,7 @@ describe("Persistent partial-index coverage", () => {
     // server-side inserts for it would get filtered out.
     const adapter = new MemoryAdapter();
     const fetcher = vi.fn().mockResolvedValue([]);
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -75,7 +76,7 @@ describe("Persistent partial-index coverage", () => {
     const adapter = new MemoryAdapter();
     await adapter.recordPartialIndex("TestActivity", "taskId", "t1", 0);
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -101,7 +102,7 @@ describe("Persistent partial-index coverage", () => {
     ]);
 
     const fetcher = vi.fn();
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -123,7 +124,7 @@ describe("Persistent partial-index coverage", () => {
     const adapter = new MemoryAdapter();
     await adapter.recordPartialIndex("TestActivity", "taskId", "t1", 0);
 
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 0,
@@ -178,7 +179,7 @@ describe("Persistent partial-index coverage", () => {
     const fetcher = vi.fn().mockResolvedValue([
       { id: "a1", taskId: "t1", text: "first" },
     ]);
-    manager = new StoreManager({
+    manager = makeStoreManager({
       workspaceId: crypto.randomUUID(),
       bootstrapFetcher: vi.fn().mockResolvedValue({
         lastSyncId: 4242,

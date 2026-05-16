@@ -11,15 +11,17 @@ Two constructor options make the engine portable:
 ```typescript
 const sm = new StoreManager({
   workspaceId: "agent-1",
-  bootstrapFetcher: ...,
-  storageAdapter: new MemoryAdapter(),             // replaces IndexedDB
-  sseClientFactory: (url) => new EventSource(url), // replaces browser EventSource
-  modelStreams: [                                   // optional secondary SSE connections
-    {
-      url: "http://calc-engine/events",
-      onStatusChange: (connected) => { /* handle disconnect/reconnect */ },
-    },
-  ],
+  transport: {
+    bootstrapFetcher: ...,
+    sseClientFactory: (url) => new EventSource(url), // replaces browser EventSource
+    modelStreams: [                                  // optional secondary SSE connections
+      {
+        url: "http://calc-engine/events",
+        onStatusChange: (connected) => { /* handle disconnect/reconnect */ },
+      },
+    ],
+  },
+  persistence: { storageAdapter: new MemoryAdapter() }, // replaces IndexedDB
 });
 ```
 
@@ -77,18 +79,20 @@ The `reflect-metadata` polyfill must be imported once before any decorated class
 
 ## Custom id generation with context
 
-`StoreManager` is generic in `TContext`. When `StoreManagerConfig.identifierFn` is supplied, it's invoked for every client-side `new Model()` (records hydrated from the server or storage adapter keep their existing ids). Push runtime state with `sm.setContext`:
+`StoreManager` is generic in `TContext`. When `advanced.identifierFn` is supplied, it's invoked for every client-side `new Model()` (records hydrated from the server or storage adapter keep their existing ids). Push runtime state with `sm.setContext`:
 
 ```typescript
 type AgentContext = { agentId: string; tenantId: string };
 
 const sm = new StoreManager<AgentContext>({
   workspaceId: "agent-1",
-  bootstrapFetcher,
-  identifierFn: (meta, ctx) =>
-    ctx == null
-      ? crypto.randomUUID()
-      : `${ctx.tenantId}:${meta.name}:${crypto.randomUUID()}`,
+  transport: { bootstrapFetcher },
+  advanced: {
+    identifierFn: (meta, ctx) =>
+      ctx == null
+        ? crypto.randomUUID()
+        : `${ctx.tenantId}:${meta.name}:${crypto.randomUUID()}`,
+  },
 });
 
 sm.setContext({ agentId: "claude-1", tenantId: "acme" });
@@ -108,19 +112,21 @@ type LayerContext = { layerId: string };
 
 const sm = new StoreManager<LayerContext>({
   workspaceId: "agent-1",
-  bootstrapFetcher,
-  applyFieldTransforms: (_meta, prop) => {
-    if (prop.type !== PropertyType.Reference) return undefined;
-    return (value, instance, ctx) => {
-      if (typeof value !== "string" || value === "" || value.includes("/")) {
-        return value;
-      }
-      // Prefer the instance's own layerId; fall back to live context for
-      // freshly-constructed models that haven't been assigned one yet.
-      const layerId =
-        (instance as { layerId?: string }).layerId ?? ctx?.layerId;
-      return layerId != null ? `${layerId}/${value}` : value;
-    };
+  transport: { bootstrapFetcher },
+  advanced: {
+    applyFieldTransforms: (_meta, prop) => {
+      if (prop.type !== PropertyType.Reference) return undefined;
+      return (value, instance, ctx) => {
+        if (typeof value !== "string" || value === "" || value.includes("/")) {
+          return value;
+        }
+        // Prefer the instance's own layerId; fall back to live context for
+        // freshly-constructed models that haven't been assigned one yet.
+        const layerId =
+          (instance as { layerId?: string }).layerId ?? ctx?.layerId;
+        return layerId != null ? `${layerId}/${value}` : value;
+      };
+    },
   },
 });
 sm.setContext({ layerId: "layer-prod" });
@@ -197,8 +203,13 @@ Use `model.watch()` on models obtained from the pool (`objectPool.getById` / `ob
 Each agent creates its own `StoreManager`. Independent working memory. All instances converge via the SSE stream — a write by one agent arrives at every other in real time:
 
 ```typescript
-const agentA = new StoreManager({ workspaceId, bootstrapFetcher, storageAdapter: new MemoryAdapter(), ... });
-const agentB = new StoreManager({ workspaceId, bootstrapFetcher, storageAdapter: new MemoryAdapter(), ... });
+const mk = () => new StoreManager({
+  workspaceId,
+  transport: { bootstrapFetcher },
+  persistence: { storageAdapter: new MemoryAdapter() },
+});
+const agentA = mk();
+const agentB = mk();
 
 await Promise.all([agentA.bootstrap(), agentB.bootstrap()]);
 // Both connected, both receiving the same SSE stream
@@ -261,17 +272,20 @@ The local update is visible instantly (before the server ACK). If the server rej
 
 ```typescript
 const sm = new StoreManager({
-  // ...
-  modelStreams: [
-    {
-      url: "http://calc-engine/events",
-      onStatusChange: (connected) => {
-        if (!connected) {
-          console.log("Calc engine disconnected — data may be stale");
-        }
+  workspaceId,
+  transport: {
+    bootstrapFetcher,
+    modelStreams: [
+      {
+        url: "http://calc-engine/events",
+        onStatusChange: (connected) => {
+          if (!connected) {
+            console.log("Calc engine disconnected — data may be stale");
+          }
+        },
       },
-    },
-  ],
+    ],
+  },
 });
 ```
 
@@ -315,9 +329,12 @@ Headless deployments often need structured error reporting more than the browser
 import { StoreManager, type EngineErrorContext } from "sync-engine";
 
 const sm = new StoreManager({
-  // ...
-  onError: (err, ctx: EngineErrorContext) => {
-    log.error({ err, ...ctx }, `engine: ${ctx.kind}`);
+  workspaceId,
+  transport: { bootstrapFetcher },
+  hooks: {
+    onError: (err, ctx: EngineErrorContext) => {
+      log.error({ err, ...ctx }, `engine: ${ctx.kind}`);
+    },
   },
 });
 ```
