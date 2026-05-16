@@ -11,7 +11,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { makeStoreManager } from "./helpers/storeManager";
 import { MemoryAdapter } from "@sync-engine/MemoryAdapter";
-import { StoreManager } from "@sync-engine/StoreManager";
 import { BaseModel } from "@sync-engine/BaseModel";
 import { makeSyncConnection } from "./helpers/makeSyncConnection";
 import { ObjectPool } from "@sync-engine/ObjectPool";

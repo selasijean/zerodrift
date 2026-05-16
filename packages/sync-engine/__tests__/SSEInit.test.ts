@@ -1,9 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { makeStoreManager } from "./helpers/storeManager";
-import {
-  StoreManager,
-  type BootstrapResponse,
-} from "@sync-engine/StoreManager";
+import { type BootstrapResponse } from "@sync-engine/StoreManager";
 import { controllableSSEClient, makeFactory } from "./helpers/sseClient";
 
 const emptyBootstrap: BootstrapResponse = {
