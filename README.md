@@ -360,6 +360,19 @@ Deeper material lives in [agent-docs/](agent-docs/):
 - **Reference server**: Go, Gin, Bun ORM, Postgres (LISTEN/NOTIFY), pgx
 - **Protocol**: append-only changelog, monotonic sync id, sync group filtering
 
+## Acknowledgments
+
+zerodrift was informed by public writing and talks on local-first sync
+engines. Two especially helpful references were Wenzhao Hu's "Reverse
+Engineering Linear's Sync Engine: A Detailed Study"
+([wzhudev/reverse-linear-sync-engine](https://github.com/wzhudev/reverse-linear-sync-engine))
+and Tuomas Artman's React Helsinki talk on
+[Linear's realtime sync](https://www.youtube.com/watch?v=WxK11RsLqp4).
+
+This project is an independent TypeScript implementation and is not affiliated
+with Linear.
+
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). The MIT grant covers zerodrift's own code.
+See [NOTICE](NOTICE) for inspiration and attribution notes.

@@ -1,0 +1,26 @@
+zerodrift
+Copyright (c) 2026 selasijean
+
+This product is licensed under the MIT License. See the LICENSE file.
+
+Inspiration and attribution
+---------------------------
+
+zerodrift was shaped by public writing and talks about local-first sync engine
+design, especially:
+
+  - Wenzhao Hu, "Reverse Engineering Linear's Sync Engine: A Detailed
+    Study" (https://github.com/wzhudev/reverse-linear-sync-engine)
+  - Tuomas Artman's React Helsinki talk on Linear's realtime sync
+    (https://www.youtube.com/watch?v=WxK11RsLqp4)
+
+Wenzhao Hu's writeup is © 2025 Wenzhao Hu and licensed under the Creative
+Commons Attribution 4.0 International License:
+https://creativecommons.org/licenses/by/4.0/
+
+zerodrift is an independent TypeScript implementation. It defines its own small
+three-endpoint sync protocol and ships its own client/server reference code. It
+contains no Linear or other third-party source code.
+
+Linear is a trademark of its respective owner. zerodrift is not affiliated
+with, endorsed by, or sponsored by Linear.
