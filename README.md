@@ -27,7 +27,7 @@ npm install zod         # for entityFromZod(...) schema authoring
 npm install eventsource # for Node/headless SSE clients
 ```
 
-If you use the decorator authoring path, enable `experimentalDecorators` in your `tsconfig.json` (or the SWC/Babel equivalent). `reflect-metadata` is **not** required — the engine never reads `design:type` metadata.
+Decorator path: enable `experimentalDecorators` in your `tsconfig.json` (or the SWC/Babel equivalent). Unlike most decorator libraries, `reflect-metadata` is **not** needed.
 
 ## Import paths
 
