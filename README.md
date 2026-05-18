@@ -2,19 +2,27 @@
 
 [![npm](https://img.shields.io/npm/v/zerodrift.svg)](https://www.npmjs.com/package/zerodrift)
 
-A TypeScript local-first sync engine. Reads are synchronous from an in-memory pool, writes are optimistic, state stays current across tabs and clients via SSE, and everything persists locally so the app survives reloads and works offline. The same engine runs in Node so agents and background workers can hold a live model just like a browser tab.
+**A TypeScript sync engine with an intuitive model API that hides the hard parts of local reads, optimistic writes, offline recovery, and realtime convergence.**
 
-You bring the backend. The client speaks a small three-endpoint protocol that can be implemented in any language. A reference Go backend and Next.js demo live in this repo so you can run the whole loop locally.
+zerodrift lets you work with synced data like normal application state. Components and headless workers read records synchronously, mutate model fields directly, call `save()`, and subscribe with typed React hooks or store APIs. Under that simple surface, the engine does the synchronization work that would otherwise spread across your codebase.
+
+The backend stays yours. Implement bootstrap, transaction, and event-stream endpoints in any stack, or start from the included Go backend and Next.js demo. In the browser, zerodrift persists models and queued writes to IndexedDB; in Node, it can run against memory or a custom storage adapter.
+
+The result is less sync code in every feature. Define models with decorators or schema-as-data, wire the three transport functions, and build against a small, predictable API while browser tabs, clients, and Node processes converge in the background.
+
+The design is inspired by Linear's sync engine; see [Acknowledgments](#acknowledgments) for prior art and attribution.
 
 ## What you get
 
-- **Local-first reads**: every read hits an in-memory `ObjectPool` first.
-- **Optimistic writes**: model changes update the UI immediately, then reconcile with server deltas.
-- **Realtime sync**: tabs and clients stay current over SSE, without polling.
-- **Offline persistence**: IndexedDB stores models and queued transactions in the browser.
-- **Two authoring paths**: decorator classes or schema-as-data via `defineSchema(...)`.
-- **React and headless runtimes**: use hooks in React, or run `StoreManager` directly in Node, CLIs, and agents.
-- **Bring your own backend**: implement bootstrap, transaction, and SSE endpoints in the stack you already use.
+- **A small API for synced data**: read records synchronously, mutate model fields directly, call `save()`, or use typed store namespaces generated from a schema.
+- **App logic without cache choreography**: fetching, invalidation, optimistic updates, reconnects, offline replay, and conflict rebasing live in the engine instead of every screen.
+- **Optimistic writes with real recovery**: local changes update immediately, batch into transaction POSTs, persist through reloads, and reconcile when matching server deltas arrive.
+- **Relationships that stay live**: references, inverse collections, owned collections, and indexed lookups update as records hydrate, load lazily, or arrive over SSE.
+- **Schema or class models**: use decorators (`@ClientModel`, `@Property`, `@Reference`) or schema-as-data (`defineSchema(...)`, `entityFromZod(...)`) without `reflect-metadata`.
+- **Memory you can shape**: choose per-model `LoadStrategy` values for eager data, lazy tables, partial index-backed loading, local-only records, or ephemeral SSE-fed state.
+- **Undo/redo built into the transaction layer**: track field-level changes, group atomic multi-model edits, and include custom remote actions in the same undo stack.
+- **React, browser, or headless Node**: use `<SyncProvider>` and typed hooks in React, or run `StoreManager` directly in agents, workers, CLIs, and tests.
+- **Your backend, your stack**: implement three HTTP endpoints in any language, with a reference Go backend and Next.js demo included.
 
 ## Install
 
@@ -33,12 +41,12 @@ Decorator path: enable `experimentalDecorators` in your `tsconfig.json` (or the 
 
 ## Import paths
 
-| Import | Use it for |
-|---|---|
-| `zerodrift` | `StoreManager`, `BaseModel`, decorators, `MemoryAdapter`, relation field types (`RefCollection`/`BackRef`/`OwnedRefs`), and the config / error / sync types. The curated, stable surface. |
-| `zerodrift/schema` | `defineSchema`, `entityFromZod`, field builders, links, extensions, and typed `store.<entity>.*` APIs. |
-| `zerodrift/react` | `<SyncProvider>` and React hooks: `useRecord`, `useRecords`, `useRecordsByIndex`, `useRelation`, `useBatch`, `useUndoRedo`, `useBootstrapStatus`. |
-| `zerodrift/internal` | Engine machinery (`ObjectPool`, `TransactionQueue`, `SyncConnection`, `ModelRegistry`, …) for tooling/tests. **No stability promise** — may change between releases. |
+| Import               | Use it for                                                                                                                                                                                |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `zerodrift`          | `StoreManager`, `BaseModel`, decorators, `MemoryAdapter`, relation field types (`RefCollection`/`BackRef`/`OwnedRefs`), and the config / error / sync types. The curated, stable surface. |
+| `zerodrift/schema`   | `defineSchema`, `entityFromZod`, field builders, links, extensions, and typed `store.<entity>.*` APIs.                                                                                    |
+| `zerodrift/react`    | `<SyncProvider>` and React hooks: `useRecord`, `useRecords`, `useRecordsByIndex`, `useRelation`, `useBatch`, `useUndoRedo`, `useBootstrapStatus`.                                         |
+| `zerodrift/internal` | Engine machinery (`ObjectPool`, `TransactionQueue`, `SyncConnection`, `ModelRegistry`, …) for tooling/tests. **No stability promise** — may change between releases.                      |
 
 ## Define your models
 
@@ -250,11 +258,11 @@ See [agent-docs/09-headless-and-agents.md](agent-docs/09-headless-and-agents.md)
 
 The client needs three endpoints:
 
-| Endpoint | Purpose |
-|---|---|
-| `GET /api/bootstrap` | Fetch initial or partial model data. |
-| `POST /api/transactions` | Accept queued client mutations. |
-| `GET /api/events` | Stream delta packets over SSE. |
+| Endpoint                 | Purpose                              |
+| ------------------------ | ------------------------------------ |
+| `GET /api/bootstrap`     | Fetch initial or partial model data. |
+| `POST /api/transactions` | Accept queued client mutations.      |
+| `GET /api/events`        | Stream delta packets over SSE.       |
 
 Bootstrap returns records grouped by model name:
 
@@ -317,7 +325,7 @@ The client reconnects with `?lastSyncId=<id>` so the server can replay missed ev
 ## Run the demo
 
 A reference Go backend + Next.js app that exercises the full sync loop
-locally live in [`examples/`](examples/). See [examples/README.md](examples/README.md)
+locally live in [examples/](examples/). See [examples/README.md](examples/README.md)
 for the one-command-each setup:
 
 ```bash
