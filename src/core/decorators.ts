@@ -16,19 +16,19 @@
  * observability, indexing, and reference resolution.
  */
 
-import { ModelRegistry } from "./ModelRegistry";
-import { defineObservableProperty } from "./observability";
+import { ModelRegistry } from "./ModelRegistry.js";
+import { defineObservableProperty } from "./observability.js";
 import {
   PropertyType,
   LoadStrategy,
   type PropertyMeta,
   type ModelMeta,
-} from "./types";
+} from "./types.js";
 import {
   installBackRefAccessor,
   installCollectionAccessor,
   installReferenceAccessor,
-} from "./refAccessors";
+} from "./refAccessors.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Ctor = new (...args: any[]) => any;

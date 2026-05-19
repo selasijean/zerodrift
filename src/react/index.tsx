@@ -18,11 +18,11 @@ import React, {
   useSyncExternalStore,
   useLayoutEffect,
 } from "react";
-import { StoreManager, type StoreManagerConfig } from "../core/StoreManager";
-import { BootstrapPhase } from "../core/types";
-import { LazyCollectionBase, BackRef } from "../core/LazyCollection";
-import { readFk } from "../core/ObjectPool";
-import type { BaseModel } from "../core/BaseModel";
+import { StoreManager, type StoreManagerConfig } from "../core/StoreManager.js";
+import { BootstrapPhase } from "../core/types.js";
+import { LazyCollectionBase, BackRef } from "../core/LazyCollection.js";
+import { readFk } from "../core/ObjectPool.js";
+import type { BaseModel } from "../core/BaseModel.js";
 
 // ---------------------------------------------------------------------------
 // Context
@@ -550,10 +550,10 @@ import {
   entityNamespaceRegistryName,
   type EntityNamespace,
   type RecordWithExtensions,
-} from "../schema/createStore";
-import type { ExtensionDescriptor } from "../schema/extend";
-import type { EntityKey, IndexedFieldKeys } from "../schema/infer";
-import type { SchemaDef } from "../schema/types";
+} from "../schema/createStore.js";
+import type { ExtensionDescriptor } from "../schema/extend.js";
+import type { EntityKey, IndexedFieldKeys } from "../schema/infer.js";
+import type { SchemaDef } from "../schema/types.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyNamespace = EntityNamespace<any, any, any>;

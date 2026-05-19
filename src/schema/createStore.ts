@@ -1,28 +1,28 @@
 import { action, computed } from "mobx";
-import type { BaseModel } from "../core/BaseModel";
-import { ModelRegistry } from "../core/ModelRegistry";
-import { prop } from "../core/ObjectPool";
+import type { BaseModel } from "../core/BaseModel.js";
+import { ModelRegistry } from "../core/ModelRegistry.js";
+import { prop } from "../core/ObjectPool.js";
 import {
   installActionMethod,
   installComputedAccessor,
-} from "../core/refAccessors";
-import type { StoreManager } from "../core/StoreManager";
-import type { UndoResult } from "../core/TransactionQueue";
-import { compileSchema } from "./compile";
+} from "../core/refAccessors.js";
+import type { StoreManager } from "../core/StoreManager.js";
+import type { UndoResult } from "../core/TransactionQueue.js";
+import { compileSchema } from "./compile.js";
 import type {
   ActionFn,
   ComputedFn,
   ExtensionDescriptor,
   MergedExtensionMembers,
-} from "./extend";
+} from "./extend.js";
 import type {
   EntityKey,
   IndexedFieldKeys,
   InferCreateInput,
   InferEntity,
   InferUpdateInput,
-} from "./infer";
-import type { SchemaDef } from "./types";
+} from "./infer.js";
+import type { SchemaDef } from "./types.js";
 
 /**
  * Curated subset of `BaseModel` lifecycle methods we expose on records so

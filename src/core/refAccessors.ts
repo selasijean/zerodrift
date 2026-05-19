@@ -1,5 +1,5 @@
-import type { IObjectPool } from "./types";
-import type { LazyCollectionBase, BackRef } from "./LazyCollection";
+import type { IObjectPool } from "./types.js";
+import type { LazyCollectionBase, BackRef } from "./LazyCollection.js";
 
 export interface RefHolder {
   store: IObjectPool | null;

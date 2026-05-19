@@ -18,7 +18,7 @@ import {
   type PartialIndexEntry,
   type StorageAdapter,
   type SyncActionHeader,
-} from "./Database";
+} from "./Database.js";
 
 export class MemoryAdapter implements StorageAdapter {
   private meta: DatabaseMeta | null = null;

@@ -1,20 +1,20 @@
 // Public schema-authoring surface. See agent-docs/RFC-schema-first-authoring.md.
 
-export { LoadStrategy } from "../core/types";
+export { LoadStrategy } from "../core/types.js";
 
-export { defineSchema, entity, link, fields } from "./builders";
-export { fields as s } from "./builders";
-export { compileSchema } from "./compile";
-export type { CompiledSchema } from "./compile";
-export { createStore } from "./createStore";
+export { defineSchema, entity, link, fields } from "./builders.js";
+export { fields as s } from "./builders.js";
+export { compileSchema } from "./compile.js";
+export type { CompiledSchema } from "./compile.js";
+export { createStore } from "./createStore.js";
 export type {
   EntityStore,
   EntityNamespace,
   RecordWithExtensions,
   StoreApi,
-} from "./createStore";
+} from "./createStore.js";
 
-export { extend } from "./extend";
+export { extend } from "./extend.js";
 export type {
   ActionFn,
   ComputedFn,
@@ -22,10 +22,10 @@ export type {
   ExtensionDescriptor,
   ExtensionMap,
   MergedExtensionMembers,
-} from "./extend";
+} from "./extend.js";
 
-export { fromZod, entityFromZod } from "./zod";
-export type { EntityFromZodFieldOverride, EntityFromZodOpts } from "./zod";
+export { fromZod, entityFromZod } from "./zod.js";
+export type { EntityFromZodFieldOverride, EntityFromZodOpts } from "./zod.js";
 
 export type {
   EntityDef,
@@ -37,7 +37,7 @@ export type {
   LinkToSpec,
   OnDelete,
   SchemaDef,
-} from "./types";
+} from "./types.js";
 
 export type {
   EntityKey,
@@ -46,4 +46,4 @@ export type {
   InferEntity,
   InferUpdateInput,
   RelationCollection,
-} from "./infer";
+} from "./infer.js";

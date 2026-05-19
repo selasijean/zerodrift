@@ -4,15 +4,15 @@
  * Ephemeral models skip IDB and are only held in the pool.
  */
 
-import type { StorageAdapter } from "./Database";
-import { ObjectPool } from "./ObjectPool";
-import { ModelRegistry } from "./ModelRegistry";
+import type { StorageAdapter } from "./Database.js";
+import { ObjectPool } from "./ObjectPool.js";
+import { ModelRegistry } from "./ModelRegistry.js";
 import {
   BaseSSEConnection,
   type SSEClientFactory,
   type SSEErrorReporter,
-} from "./BaseSSEConnection";
-import { LoadStrategy } from "./types";
+} from "./BaseSSEConnection.js";
+import { LoadStrategy } from "./types.js";
 
 export interface ModelUpdate {
   modelName: string;

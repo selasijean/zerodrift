@@ -1,4 +1,4 @@
-import type { BaseModel } from "./BaseModel";
+import type { BaseModel } from "./BaseModel.js";
 
 // ---------------------------------------------------------------------------
 // Enums

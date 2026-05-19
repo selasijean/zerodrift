@@ -19,28 +19,28 @@
  *   storeManager.getOrLoadById("DocumentContent", docId)
  */
 
-import { ModelRegistry } from "./ModelRegistry";
-import { DEFAULT_TRANSIENT_INDEX_DEPTH } from "./types";
-import { ObjectPool, prop, readFk } from "./ObjectPool";
+import { ModelRegistry } from "./ModelRegistry.js";
+import { DEFAULT_TRANSIENT_INDEX_DEPTH } from "./types.js";
+import { ObjectPool, prop, readFk } from "./ObjectPool.js";
 import {
   Database,
   BootstrapType,
   type StorageAdapter,
   type DatabaseMeta,
   type PartialIndexEntry,
-} from "./Database";
+} from "./Database.js";
 import {
   FullStore,
   PartialStore,
   EphemeralStore,
   type ModelStore,
-} from "./Store";
+} from "./Store.js";
 import {
   TransactionQueue,
   type TransactionSender,
   type UndoableActionHandlers,
-} from "./TransactionQueue";
-import type { UndoableAction } from "./Transaction";
+} from "./TransactionQueue.js";
+import type { UndoableAction } from "./Transaction.js";
 import {
   SyncConnection,
   encodeCsvList,
@@ -48,14 +48,14 @@ import {
   type SSEClientFactory,
   type SyncMessageTransform,
   createBrowserSSEFactory,
-} from "./SyncConnection";
-import { ModelStream, type ModelStreamMessageTransform } from "./ModelStream";
-import { BatchModelLoader, type IndexBatchFetcher } from "./BatchModelLoader";
+} from "./SyncConnection.js";
+import { ModelStream, type ModelStreamMessageTransform } from "./ModelStream.js";
+import { BatchModelLoader, type IndexBatchFetcher } from "./BatchModelLoader.js";
 import {
   COMPOUND_FETCH_THRESHOLD,
   wrapCompoundFetcher,
-} from "./CompoundIndexFetcher";
-import { BaseModel } from "./BaseModel";
+} from "./CompoundIndexFetcher.js";
+import { BaseModel } from "./BaseModel.js";
 import {
   BootstrapPhase,
   LoadStrategy,
@@ -71,7 +71,7 @@ import {
   type CommitRouteHandler,
   type CommitRouteResult,
   type OnModelTouchedHandler,
-} from "./types";
+} from "./types.js";
 
 /**
  * Thrown when a delete/archive is blocked by an onDelete: "restrict" relationship.

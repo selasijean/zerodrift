@@ -9,15 +9,15 @@
  * If the hash changes between sessions, the local IndexedDB needs a migration.
  */
 
-import type { BaseModel } from "./BaseModel";
-import { hashString } from "./hash";
+import type { BaseModel } from "./BaseModel.js";
+import { hashString } from "./hash.js";
 import {
   type ModelMeta,
   type PropertyMeta,
   type CoveringPath,
   LoadStrategy,
   PropertyType,
-} from "./types";
+} from "./types.js";
 
 class ModelRegistryImpl {
   private models = new Map<string, ModelMeta>();

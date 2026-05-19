@@ -30,9 +30,9 @@
  */
 
 import { observable, runInAction, makeObservable } from "mobx";
-import type { BaseModel } from "./BaseModel";
-import { readFk } from "./ObjectPool";
-import type { CoveringPath } from "./types";
+import type { BaseModel } from "./BaseModel.js";
+import { readFk } from "./ObjectPool.js";
+import type { CoveringPath } from "./types.js";
 
 /** Walk a `CoveringPath` from `parent` through the pool, returning the
  * leaf FK value or null if any link is missing. Depth-1 paths are a single

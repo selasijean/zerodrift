@@ -1,4 +1,4 @@
-import { toError, type EngineErrorContext } from "./types";
+import { toError, type EngineErrorContext } from "./types.js";
 
 export interface SSEClient {
   onmessage: ((event: { data: string }) => void) | null;

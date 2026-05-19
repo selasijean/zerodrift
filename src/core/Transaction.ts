@@ -8,8 +8,8 @@
  * change, the server value becomes our new baseline and our value is re-applied.
  */
 
-import type { BaseModel } from "./BaseModel";
-import { TransactionState, type PropertyChange } from "./types";
+import type { BaseModel } from "./BaseModel.js";
+import { TransactionState, type PropertyChange } from "./types.js";
 
 export abstract class BaseTransaction {
   readonly id = crypto.randomUUID();

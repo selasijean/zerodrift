@@ -1,4 +1,4 @@
-import type { LoadStrategy, OnDelete } from "../core/types";
+import type { LoadStrategy, OnDelete } from "../core/types.js";
 
 export type FieldKind =
   | "id"

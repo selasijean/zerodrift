@@ -8,6 +8,10 @@
     "declaration": true,
     "outDir": "./dist",
     "rootDir": "./src",
+    // Strict NodeNext so dist/ resolves under Node's ESM resolver (Next.js
+    // SSR, Deno, Bun); base config stays "bundler" for lenient test typechecks.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     // The @zerodrift/* alias is test-only; src uses relative imports, so
     // it's irrelevant to the build. Cleared as hygiene, not necessity.
     "paths": {}

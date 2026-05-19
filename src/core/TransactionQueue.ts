@@ -13,10 +13,10 @@
  * The undo stack stores "entries" — either a single tx or a batch of txs.
  */
 
-import type { StorageAdapter } from "./Database";
-import { ObjectPool } from "./ObjectPool";
-import { ModelRegistry } from "./ModelRegistry";
-import { toError, type EngineErrorContext } from "./types";
+import type { StorageAdapter } from "./Database.js";
+import { ObjectPool } from "./ObjectPool.js";
+import { ModelRegistry } from "./ModelRegistry.js";
+import { toError, type EngineErrorContext } from "./types.js";
 import {
   BaseTransaction,
   UpdateTransaction,
@@ -24,9 +24,9 @@ import {
   DeleteTransaction,
   ArchiveTransaction,
   type UndoableAction,
-} from "./Transaction";
-import { TransactionState, type PropertyChange } from "./types";
-import type { BaseModel } from "./BaseModel";
+} from "./Transaction.js";
+import { TransactionState, type PropertyChange } from "./types.js";
+import type { BaseModel } from "./BaseModel.js";
 
 export interface BatchResponse {
   success: boolean;

@@ -1,13 +1,13 @@
-import { BaseModel } from "../core/BaseModel";
-import { hashString } from "../core/hash";
-import { ModelRegistry } from "../core/ModelRegistry";
-import { defineObservableProperty } from "../core/observability";
+import { BaseModel } from "../core/BaseModel.js";
+import { hashString } from "../core/hash.js";
+import { ModelRegistry } from "../core/ModelRegistry.js";
+import { defineObservableProperty } from "../core/observability.js";
 import {
   installCollectionAccessor,
   installReferenceAccessor,
-} from "../core/refAccessors";
-import { PropertyType, type ModelMeta, type PropertyMeta } from "../core/types";
-import type { AnyFieldBuilder, AnyLinkDef, EntityDef, SchemaDef } from "./types";
+} from "../core/refAccessors.js";
+import { PropertyType, type ModelMeta, type PropertyMeta } from "../core/types.js";
+import type { AnyFieldBuilder, AnyLinkDef, EntityDef, SchemaDef } from "./types.js";
 
 export interface CompiledSchema {
   /** Registry names of every entity that was compiled. */

@@ -1,5 +1,5 @@
-import type { EntityKey, InferEntity } from "./infer";
-import type { SchemaDef } from "./types";
+import type { EntityKey, InferEntity } from "./infer.js";
+import type { SchemaDef } from "./types.js";
 
 export type ComputedFn<S extends SchemaDef, K extends EntityKey<S>> = (
   record: InferEntity<S, K>,

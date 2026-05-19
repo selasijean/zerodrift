@@ -15,10 +15,10 @@
  * fans out per-parent (existing behavior).
  */
 
-import type { IndexBatchFetcher, IndexQuery } from "./BatchModelLoader";
-import { ModelRegistry } from "./ModelRegistry";
-import { readFk, type ObjectPool } from "./ObjectPool";
-import { PropertyType } from "./types";
+import type { IndexBatchFetcher, IndexQuery } from "./BatchModelLoader.js";
+import { ModelRegistry } from "./ModelRegistry.js";
+import { readFk, type ObjectPool } from "./ObjectPool.js";
+import { PropertyType } from "./types.js";
 
 /** Switch to a compound fetch only when at least this many pending
  * requests share a single parent FK value. Below this, the per-parent

@@ -13,12 +13,12 @@
  * a sign the curated surface is missing something — open an issue.
  */
 
-export { ObjectPool } from "./ObjectPool";
-export { Database } from "./Database";
-export { ModelRegistry } from "./ModelRegistry";
-export { defineObservableProperty } from "./observability";
+export { ObjectPool } from "./ObjectPool.js";
+export { Database } from "./Database.js";
+export { ModelRegistry } from "./ModelRegistry.js";
+export { defineObservableProperty } from "./observability.js";
 
-export { FullStore, PartialStore, ModelStore } from "./Store";
+export { FullStore, PartialStore, ModelStore } from "./Store.js";
 
 export {
   BaseTransaction,
@@ -26,18 +26,18 @@ export {
   CreateTransaction,
   DeleteTransaction,
   ArchiveTransaction,
-} from "./Transaction";
-export { TransactionQueue } from "./TransactionQueue";
+} from "./Transaction.js";
+export { TransactionQueue } from "./TransactionQueue.js";
 
-export { SyncConnection } from "./SyncConnection";
-export { ModelStream } from "./ModelStream";
+export { SyncConnection } from "./SyncConnection.js";
+export { ModelStream } from "./ModelStream.js";
 
-export { normalizeConfig } from "./StoreManager";
-export type { NormalizedConfig } from "./StoreManager";
+export { normalizeConfig } from "./StoreManager.js";
+export type { NormalizedConfig } from "./StoreManager.js";
 
 export type {
   IObjectPool,
   IStoreManager,
   CoveringPath,
-} from "./types";
-export { DEFAULT_TRANSIENT_INDEX_DEPTH, toError } from "./types";
+} from "./types.js";
+export { DEFAULT_TRANSIENT_INDEX_DEPTH, toError } from "./types.js";

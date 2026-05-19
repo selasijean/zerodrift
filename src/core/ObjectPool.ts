@@ -13,14 +13,14 @@
  */
 
 import { createAtom, runInAction, type IAtom } from "mobx";
-import type { BaseModel } from "./BaseModel";
-import { ModelRegistry } from "./ModelRegistry";
-import { PropertyType, type ModelMeta } from "./types";
+import type { BaseModel } from "./BaseModel.js";
+import { ModelRegistry } from "./ModelRegistry.js";
+import { PropertyType, type ModelMeta } from "./types.js";
 import type {
   LazyCollectionBase,
   RefCollection,
   BackRef,
-} from "./LazyCollection";
+} from "./LazyCollection.js";
 
 type Listener = () => void;
 interface Subscription {

@@ -1,4 +1,4 @@
-import type { EntityDef, FieldBuilder, FieldMeta, SchemaDef } from "./types";
+import type { EntityDef, FieldBuilder, FieldMeta, SchemaDef } from "./types.js";
 
 type FieldType<F> = F extends FieldBuilder<infer T, FieldMeta> ? T : never;
 

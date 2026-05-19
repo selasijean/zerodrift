@@ -1,6 +1,6 @@
 import type { z } from "zod";
-import { fields, entity, rebuildFieldBuilder } from "./builders";
-import type { AnyFieldBuilder, EntityDef, FieldBuilder } from "./types";
+import { fields, entity, rebuildFieldBuilder } from "./builders.js";
+import type { AnyFieldBuilder, EntityDef, FieldBuilder } from "./types.js";
 
 /**
  * Minimal structural shape used to walk a Zod schema at runtime without

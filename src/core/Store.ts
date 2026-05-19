@@ -7,10 +7,10 @@
  *   - EphemeralStore for ephemeral models (pool-only, never persisted)
  */
 
-import type { BaseModel } from "./BaseModel";
-import type { StorageAdapter } from "./Database";
-import { ObjectPool } from "./ObjectPool";
-import { type ModelMeta, LoadStrategy } from "./types";
+import type { BaseModel } from "./BaseModel.js";
+import type { StorageAdapter } from "./Database.js";
+import { ObjectPool } from "./ObjectPool.js";
+import { type ModelMeta, LoadStrategy } from "./types.js";
 
 export abstract class ModelStore {
   protected meta: ModelMeta;

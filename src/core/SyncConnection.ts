@@ -22,16 +22,16 @@
  *   only has to mutate the pool; parent collections track changes themselves.
  */
 
-import type { StorageAdapter } from "./Database";
-import { ObjectPool } from "./ObjectPool";
-import { ModelRegistry } from "./ModelRegistry";
-import { TransactionQueue } from "./TransactionQueue";
-import { LoadStrategy, PropertyType, type ModelMeta } from "./types";
+import type { StorageAdapter } from "./Database.js";
+import { ObjectPool } from "./ObjectPool.js";
+import { ModelRegistry } from "./ModelRegistry.js";
+import { TransactionQueue } from "./TransactionQueue.js";
+import { LoadStrategy, PropertyType, type ModelMeta } from "./types.js";
 import {
   BaseSSEConnection,
   type SSEClientFactory,
   type SSEErrorReporter,
-} from "./BaseSSEConnection";
+} from "./BaseSSEConnection.js";
 
 // Re-export so existing imports from "@zerodrift/SyncConnection" keep working.
 export {
@@ -39,7 +39,7 @@ export {
   type SSEClientFactory,
   type SSEErrorReporter,
   createBrowserSSEFactory,
-} from "./BaseSSEConnection";
+} from "./BaseSSEConnection.js";
 
 /** How many syncIds back to retain in the SyncAction store before pruning.
  * Covers short offline gaps where a persisted pending tx asks "was my

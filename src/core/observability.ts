@@ -20,7 +20,7 @@
  */
 
 import { observable } from "mobx";
-import { BaseModel } from "./BaseModel";
+import { BaseModel } from "./BaseModel.js";
 
 export function defineObservableProperty(target: object, propName: string) {
   // Raw storage key — holds the value before the MobX box is created

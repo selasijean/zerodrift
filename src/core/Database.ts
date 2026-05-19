@@ -16,7 +16,7 @@
  *   - Local: DB exists, no server contact needed (offline start)
  */
 
-import { ModelRegistry } from "./ModelRegistry";
+import { ModelRegistry } from "./ModelRegistry.js";
 
 export interface DatabaseMeta {
   lastSyncId: number;

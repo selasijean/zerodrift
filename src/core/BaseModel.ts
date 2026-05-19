@@ -14,16 +14,16 @@
  * These are stored on __collections and __backRefs, read by the decorator getters.
  */
 
-import { ModelRegistry } from "./ModelRegistry";
+import { ModelRegistry } from "./ModelRegistry.js";
 import {
   PropertyType,
   DEFAULT_TRANSIENT_INDEX_DEPTH,
   type PropertyChange,
   type IObjectPool,
   type IStoreManager,
-} from "./types";
-import { LazyCollectionBase, RefCollection, BackRef } from "./LazyCollection";
-import { OwnedRefs } from "./LazyOwnedCollection";
+} from "./types.js";
+import { LazyCollectionBase, RefCollection, BackRef } from "./LazyCollection.js";
+import { OwnedRefs } from "./LazyOwnedCollection.js";
 import {
   action,
   computed,

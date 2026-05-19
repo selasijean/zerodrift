@@ -1,4 +1,4 @@
-import { dateDeserializer, dateSerializer } from "../core/serializers";
+import { dateDeserializer, dateSerializer } from "../core/serializers.js";
 import type {
   AnyFieldBuilder,
   AnyLinkDef,
@@ -8,7 +8,7 @@ import type {
   FieldMeta,
   LinkDef,
   SchemaDef,
-} from "./types";
+} from "./types.js";
 
 function makeBuilder<T, M extends FieldMeta>(meta: M): FieldBuilder<T, M> {
   return {

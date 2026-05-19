@@ -17,8 +17,8 @@
  */
 
 import { runInAction } from "mobx";
-import type { BaseModel } from "./BaseModel";
-import { LazyCollectionBase, CollectionState } from "./LazyCollection";
+import type { BaseModel } from "./BaseModel.js";
+import { LazyCollectionBase, CollectionState } from "./LazyCollection.js";
 
 export class OwnedRefs<
   T extends BaseModel = BaseModel,

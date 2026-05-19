@@ -7,8 +7,8 @@ export {
   PropertyType,
   BootstrapPhase,
   TransactionState,
-} from "./types";
-export { dateSerializer, dateDeserializer } from "./serializers";
+} from "./types.js";
+export { dateSerializer, dateDeserializer } from "./serializers.js";
 
 // ── Adopter-facing types ───────────────────────────────────────────────────
 // Referenced by the public config / decorator / commit-routing surface.
@@ -24,7 +24,7 @@ export type {
   OnDelete,
   EngineErrorContext,
   EngineErrorHandler,
-} from "./types";
+} from "./types.js";
 
 // ── Model definition ───────────────────────────────────────────────────────
 export {
@@ -41,22 +41,22 @@ export {
   ReferenceArray,
   Action,
   Computed,
-} from "./decorators";
-export { BaseModel } from "./BaseModel";
+} from "./decorators.js";
+export { BaseModel } from "./BaseModel.js";
 
 // Relation field types — adopters annotate model fields with these
 // (`public issues: RefCollection<Issue>`), so they stay on the curated
 // surface even though their construction is engine-internal.
-export { RefCollection, BackRef, CollectionState } from "./LazyCollection";
-export { OwnedRefs } from "./LazyOwnedCollection";
+export { RefCollection, BackRef, CollectionState } from "./LazyCollection.js";
+export { OwnedRefs } from "./LazyOwnedCollection.js";
 
 // ── Storage ────────────────────────────────────────────────────────────────
-export { MemoryAdapter } from "./MemoryAdapter";
-export { BootstrapType } from "./Database";
-export type { DatabaseMeta, StorageAdapter } from "./Database";
+export { MemoryAdapter } from "./MemoryAdapter.js";
+export { BootstrapType } from "./Database.js";
+export type { DatabaseMeta, StorageAdapter } from "./Database.js";
 
 // ── Engine ─────────────────────────────────────────────────────────────────
-export { StoreManager, RestrictDeleteError } from "./StoreManager";
+export { StoreManager, RestrictDeleteError } from "./StoreManager.js";
 export type {
   BootstrapResponse,
   BootstrapFetcher,
@@ -72,21 +72,21 @@ export type {
   OnDemandFetcher,
   OnDemandBatchFetcher,
   ModelStreamConfig,
-} from "./StoreManager";
+} from "./StoreManager.js";
 
 // ── Transactions & undo (config / runUndoable surface) ─────────────────────
-export type { UndoableAction } from "./Transaction";
+export type { UndoableAction } from "./Transaction.js";
 export type {
   TransactionSender,
   BatchResponse,
   UndoableActionHandlers,
   UndoResult,
-} from "./TransactionQueue";
+} from "./TransactionQueue.js";
 
 // ── Sync (config: syncTransform / modelStreams) ────────────────────────────
 export type {
   SyncAction,
   DeltaPacket,
   SyncMessageTransform,
-} from "./SyncConnection";
-export type { ModelUpdate, ModelStreamMessageTransform } from "./ModelStream";
+} from "./SyncConnection.js";
+export type { ModelUpdate, ModelStreamMessageTransform } from "./ModelStream.js";
