@@ -315,7 +315,8 @@ export interface StorageAdapter {
   close(): Promise<void>;
   /**
    * Close the connection AND permanently delete all persisted data.
-   * Use for explicit logout / factory-reset flows — NOT for routine teardown.
+   * Called by StoreManager.destroy() for explicit logout / factory-reset
+   * flows — NOT for routine teardown.
    */
   destroy(): Promise<void>;
   get isConnected(): boolean;

@@ -2839,7 +2839,21 @@ export class StoreManager<TContext = unknown> {
     this.seededSyncGroups = [];
   }
 
+  /** Routine cleanup (e.g. React unmount): stop sync, clear the object pool,
+   * and `close()` the persistence layer — persisted data is preserved so the
+   * next load can do a fast partial/local bootstrap. Not a logout. */
   async teardown() {
+    await this.shutdown(false);
+  }
+
+  /** Logout / account switch: stop sync, clear the object pool, and `destroy()`
+   * the persistence layer — permanently wiping its data, whether persistence is
+   * IndexedDB or in-memory. Unlike {@link teardown}, nothing survives. */
+  async destroy() {
+    await this.shutdown(true);
+  }
+
+  private async shutdown(destroyData: boolean) {
     this.stopped = true;
     BaseModel.storeManager = null;
     this.loadedModelsUnsub?.();
@@ -2857,7 +2871,7 @@ export class StoreManager<TContext = unknown> {
     this.transactionQueue.destroy();
     this.indexBatchLoader?.dispose();
     this.indexBatchLoader = null;
-    await this.database.close();
+    await (destroyData ? this.database.destroy() : this.database.close());
     this.objectPool.clear();
     this.stores.clear();
     this.partialIndexCoverage.clear();

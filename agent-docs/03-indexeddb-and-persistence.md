@@ -141,6 +141,25 @@ If the app crashes, closes, or loses connectivity before the transaction reaches
 
 Once a transaction reaches `Completed` state (server acknowledged and delta received), it's removed from `__transactions`.
 
+## Clearing data (logout / account switch)
+
+The StoreManager exposes two cleanup methods that differ only in what happens to persisted data:
+
+```typescript
+// Routine cleanup (React unmount). Preserves persisted data.
+await storeManager.teardown();
+
+// Logout / account switch. Permanently wipes persisted data.
+await storeManager.destroy();
+```
+
+Both stop sync (disconnect SSE/model streams, drain the transaction queue), clear the object pool, and reset all in-memory tracking. The difference is the persistence layer — mirroring the adapter's own `close()` / `destroy()` pairing:
+
+- **`teardown()`** calls `adapter.close()` — the connection is closed but data is left on disk, so the next page load can do a fast partial/local bootstrap. It is *not* a logout.
+- **`destroy()`** calls `adapter.destroy()` — permanently deleting the workspace's data.
+
+`destroy()` works regardless of the configured `persistence` backend: for the IndexedDB `Database` it deletes the `sync_<workspaceId>` database, and for an in-memory adapter it drops the adapter's in-memory state. Either way the object pool is cleared in the same pass, so no stale instances survive.
+
 ## Summary: What Lives Where
 
 | Data | ObjectPool (RAM) | IndexedDB (disk) |
