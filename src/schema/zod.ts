@@ -125,17 +125,42 @@ type ZodToFieldMeta<Z, Accum = Record<never, never>> = Z extends {
         ? Accum & { kind: ZodKindFromTypeName<T> }
         : Accum;
 
+/** Empty meta marker — convention-driven flags (autoIndex) layer on top.
+ * `id` is excluded because the storage layer treats the PK specially and
+ * never materializes a secondary index for it; the empty-string suffix is
+ * excluded so a defaulted/blank config value doesn't index every field. */
+type AutoIndexMeta<
+  K,
+  AI extends string | undefined,
+> = K extends "id"
+  ? Record<never, never>
+  : AI extends ""
+    ? Record<never, never>
+    : AI extends string
+      ? K extends `${string}${AI}`
+        ? { indexed: true }
+        : Record<never, never>
+      : Record<never, never>;
+
 /**
  * Auto-derived `FieldBuilder` type for a Zod-object key. The `id` key is
  * special-cased to carry `{kind: "id"}` (the runtime routes `id` through
  * `fields.id()` regardless of the Zod-declared id type). Every other key
  * walks its Zod schema via `ZodToFieldMeta` so PK, optional, and default
  * flags all flow into the field's create-input optionality the same way.
+ * `AI` is the opts.autoIndex suffix — matching keys pick up `{indexed: true}`.
  */
-type AutoFieldFromZod<K, ZS> = K extends "id"
-  ? FieldBuilder<string, FieldMeta & { kind: "id" }>
+type AutoFieldFromZod<
+  K,
+  ZS,
+  AI extends string | undefined = undefined,
+> = K extends "id"
+  ? FieldBuilder<string, FieldMeta & { kind: "id" } & AutoIndexMeta<K, AI>>
   : ZS extends z.ZodType
-    ? FieldBuilder<z.infer<ZS>, FieldMeta & ZodToFieldMeta<ZS>>
+    ? FieldBuilder<
+        z.infer<ZS>,
+        FieldMeta & ZodToFieldMeta<ZS> & AutoIndexMeta<K, AI>
+      >
     : FieldBuilder<unknown, FieldMeta & { kind: FieldKind }>;
 
 /**
@@ -147,10 +172,13 @@ export type EntityFromZodFieldOverride<AutoT = unknown> =
   | AnyFieldBuilder
   | ((auto: FieldBuilder<AutoT>) => AnyFieldBuilder);
 
-type EntityFromZodFieldOverrides<Z extends z.ZodObject> = {
+type EntityFromZodFieldOverrides<
+  Z extends z.ZodObject,
+  AI extends string | undefined = undefined,
+> = {
   [K in keyof Z["shape"] & string]?:
     | AnyFieldBuilder
-    | ((auto: AutoFieldFromZod<K, Z["shape"][K]>) => unknown);
+    | ((auto: AutoFieldFromZod<K, Z["shape"][K], AI>) => unknown);
 };
 
 /**
@@ -189,10 +217,17 @@ type FieldFromOverride<O, Auto> = O extends (...args: never[]) => infer R
  * Override metadata (`.indexed()`, refId target, …) propagates into the
  * entity's TS type so downstream helpers like `IndexedFieldKeys` see them.
  */
-type MergedFieldsFromZodObject<Z extends z.ZodObject, F> = {
-  [K in keyof Z["shape"]]: K extends keyof F
-    ? FieldFromOverride<F[K], AutoFieldFromZod<K, Z["shape"][K]>>
-    : AutoFieldFromZod<K, Z["shape"][K]>;
+type MergedFieldsFromZodObject<
+  Z extends z.ZodObject,
+  F,
+  Om extends readonly string[] = readonly [],
+  AI extends string | undefined = undefined,
+> = {
+  [K in keyof Z["shape"] as K extends Om[number]
+    ? never
+    : K]: K extends keyof F
+    ? FieldFromOverride<F[K], AutoFieldFromZod<K, Z["shape"][K], AI>>
+    : AutoFieldFromZod<K, Z["shape"][K], AI>;
 };
 
 /** Non-`fields` portion of the opts — shared across the public type and
@@ -224,6 +259,13 @@ export interface EntityFromZodOpts<Z extends z.ZodObject = z.ZodObject>
       | AnyFieldBuilder
       | ((auto: AutoFieldFromZod<K, Z["shape"][K]>) => AnyFieldBuilder);
   };
+  /** Fields whose Zod name ends with this suffix pick up `.indexed()` —
+   * intended for the common FK-naming convention (`/ID$/` → `autoIndex: "ID"`).
+   * Suppressed for any key that supplies a builder-form override. */
+  autoIndex?: string;
+  /** Field names to drop entirely from the produced entity. Common when the
+   * source Zod was generated from a DTO that carries transport-only keys. */
+  omit?: readonly string[];
 }
 
 /**
@@ -254,19 +296,37 @@ export interface EntityFromZodOpts<Z extends z.ZodObject = z.ZodObject>
 export function entityFromZod<
   Z extends z.ZodObject,
   const F = Record<never, never>,
+  const Om extends readonly (keyof Z["shape"] & string)[] = readonly [],
+  const AI extends string | undefined = undefined,
 >(
   zSchema: Z,
   opts: EntityFromZodOptsBase & {
-    fields?: F & EntityFromZodFieldOverrides<Z> & NoExtraZodFieldKeys<Z, F>;
+    fields?: F & EntityFromZodFieldOverrides<Z, AI> & NoExtraZodFieldKeys<Z, F>;
+    autoIndex?: AI;
+    omit?: Om;
   },
-): EntityDef<MergedFieldsFromZodObject<Z, F>> {
+): EntityDef<MergedFieldsFromZodObject<Z, F, Om, AI>> {
   const overrides = (opts.fields ?? {}) as Record<
     string,
     EntityFromZodFieldOverride
   >;
+  const omitted = new Set<string>(opts.omit ?? []);
+  const autoIndexSuffix =
+    opts.autoIndex != null && opts.autoIndex !== "" ? opts.autoIndex : null;
   const fieldsRecord: Record<string, AnyFieldBuilder> = {};
   for (const [key, fieldSchema] of Object.entries(zSchema.shape)) {
-    const auto = key === "id" ? fields.id() : fromZod(fieldSchema);
+    if (omitted.has(key)) {
+      continue;
+    }
+    let auto: AnyFieldBuilder =
+      key === "id" ? fields.id() : fromZod(fieldSchema);
+    if (
+      autoIndexSuffix != null &&
+      key !== "id" &&
+      key.endsWith(autoIndexSuffix)
+    ) {
+      auto = auto.indexed();
+    }
     const override = overrides[key];
     fieldsRecord[key] =
       typeof override === "function"
@@ -279,5 +339,55 @@ export function entityFromZod<
     name: opts.name,
     version: opts.version,
     fields: fieldsRecord,
-  }) as EntityDef<MergedFieldsFromZodObject<Z, F>>;
+  }) as EntityDef<MergedFieldsFromZodObject<Z, F, Om, AI>>;
+}
+
+/**
+ * Map a whole `{key: ZodObject}` module (e.g. an OpenAPI-generated barrel)
+ * into an entities record by calling `entityFromZod` per key with shared
+ * opts. The entity key in the returned record is the input key; the registry
+ * name is auto-derived (PascalCase of the key) by `compileSchema` — no need
+ * to spell `name` per entity.
+ *
+ *     const entities = entitiesFromZod(generatedZods, {
+ *       loadStrategy: LoadStrategy.Eager,
+ *       autoIndex: "ID",
+ *       omit: ["createdAt", "updatedAt"],
+ *     });
+ *     const schema = defineSchema({ entities, links: { ... } });
+ *
+ * Per-entity overrides are not threaded — drop down to `entityFromZod` for
+ * the handful that need a custom `fields` map or distinct `loadStrategy`.
+ */
+type EntitiesFromZodResult<
+  Zods extends Record<string, z.ZodObject>,
+  Om extends readonly string[],
+  AI extends string | undefined,
+> = {
+  [K in keyof Zods]: EntityDef<
+    MergedFieldsFromZodObject<Zods[K], Record<never, never>, Om, AI>
+  >;
+};
+
+export function entitiesFromZod<
+  Zods extends Record<string, z.ZodObject>,
+  const Om extends readonly string[] = readonly [],
+  const AI extends string | undefined = undefined,
+>(
+  zods: Zods,
+  opts: Pick<EntityFromZodOptsBase, "loadStrategy" | "usedForPartialIndexes"> & {
+    autoIndex?: AI;
+    omit?: Om;
+  },
+): EntitiesFromZodResult<Zods, Om, AI> {
+  const out: Record<string, EntityDef> = {};
+  for (const [key, zod] of Object.entries(zods)) {
+    out[key] = entityFromZod(zod, {
+      loadStrategy: opts.loadStrategy,
+      usedForPartialIndexes: opts.usedForPartialIndexes,
+      autoIndex: opts.autoIndex,
+      omit: opts.omit as readonly never[] | undefined,
+    });
+  }
+  return out as EntitiesFromZodResult<Zods, Om, AI>;
 }

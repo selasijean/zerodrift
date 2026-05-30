@@ -24,7 +24,7 @@ export type {
   MergedExtensionMembers,
 } from "./extend.js";
 
-export { fromZod, entityFromZod } from "./zod.js";
+export { fromZod, entityFromZod, entitiesFromZod } from "./zod.js";
 export type { EntityFromZodFieldOverride, EntityFromZodOpts } from "./zod.js";
 
 export type {

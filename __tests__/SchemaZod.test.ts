@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   compileSchema,
   defineSchema,
+  entitiesFromZod,
   entity,
   entityFromZod,
   fromZod,
@@ -528,5 +529,219 @@ describe("entityFromZod — per-field overrides", () => {
 
     type IssueIndexedKeys = IndexedFieldKeys<typeof schema, "issue">;
     expectTypeOf<IssueIndexedKeys>().toEqualTypeOf<"teamId" | "email">();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// entityFromZod — autoIndex + omit conveniences
+// ---------------------------------------------------------------------------
+
+describe("entityFromZod — autoIndex", () => {
+  it("applies .indexed() to every field whose name ends with the suffix", () => {
+    const def = entityFromZod(
+      z.object({
+        id: z.string(),
+        teamID: z.string(),
+        creatorID: z.string(),
+        title: z.string(),
+      }),
+      {
+        loadStrategy: LoadStrategy.Eager,
+        name: "AutoIndexedIssue",
+        autoIndex: "ID",
+      },
+    );
+    expect(def.fields.teamID.meta.indexed).toBe(true);
+    expect(def.fields.creatorID.meta.indexed).toBe(true);
+    expect(def.fields.title.meta.indexed).toBe(false);
+    expect(def.fields.id.meta.indexed).toBe(false);
+  });
+
+  it("propagates auto-indexed fields to IndexedFieldKeys", () => {
+    const schema = defineSchema({
+      entities: {
+        issue: entityFromZod(
+          z.object({
+            id: z.string(),
+            teamID: z.string(),
+            creatorID: z.string(),
+            title: z.string(),
+          }),
+          {
+            loadStrategy: LoadStrategy.Eager,
+            name: "AutoIndexedTypedIssue",
+            autoIndex: "ID",
+          },
+        ),
+      },
+      links: {},
+    });
+    expect(schema.entities.issue.fields.teamID.meta.indexed).toBe(true);
+    type IK = IndexedFieldKeys<typeof schema, "issue">;
+    expectTypeOf<IK>().toEqualTypeOf<"teamID" | "creatorID">();
+  });
+
+  it("treats an empty-string suffix as no-op (does not index every field)", () => {
+    const def = entityFromZod(
+      z.object({ id: z.string(), title: z.string(), name: z.string() }),
+      {
+        loadStrategy: LoadStrategy.Eager,
+        name: "EmptyAutoIndex",
+        autoIndex: "",
+      },
+    );
+    expect(def.fields.title.meta.indexed).toBe(false);
+    expect(def.fields.name.meta.indexed).toBe(false);
+    expect(def.fields.id.meta.indexed).toBe(false);
+  });
+
+  it("never auto-indexes the `id` key, even when the suffix would match", () => {
+    const def = entityFromZod(z.object({ id: z.string(), userID: z.string() }), {
+      loadStrategy: LoadStrategy.Eager,
+      name: "AutoIndexIdGuard",
+      autoIndex: "id",
+    });
+    expect(def.fields.id.meta.kind).toBe("id");
+    expect(def.fields.id.meta.indexed).toBe(false);
+    expect(def.fields.userID.meta.indexed).toBe(false); // "userID" doesn't end in "id" (case-sensitive)
+  });
+
+  it("yields to an explicit builder-form override (refId replaces auto-indexed field)", () => {
+    const def = entityFromZod(
+      z.object({ id: z.string(), teamID: z.string() }),
+      {
+        loadStrategy: LoadStrategy.Eager,
+        name: "AutoIndexOverride",
+        autoIndex: "ID",
+        fields: {
+          teamID: s.refId("team"),
+        },
+      },
+    );
+    expect(def.fields.teamID.meta.kind).toBe("refId");
+    expect(def.fields.teamID.meta.indexed).toBe(false);
+  });
+});
+
+describe("entityFromZod — omit", () => {
+  it("overlapping omit + autoIndex: omit wins (key is dropped, not indexed)", () => {
+    const def = entityFromZod(
+      z.object({
+        id: z.string(),
+        teamID: z.string(),
+        deletedID: z.string(),
+      }),
+      {
+        loadStrategy: LoadStrategy.Eager,
+        name: "OmitVsAutoIndex",
+        autoIndex: "ID",
+        omit: ["deletedID"],
+      },
+    );
+    expect(def.fields.teamID.meta.indexed).toBe(true);
+    expect(Object.keys(def.fields)).not.toContain("deletedID");
+  });
+
+  it("drops the named fields from the produced entity", () => {
+    const def = entityFromZod(
+      z.object({
+        id: z.string(),
+        title: z.string(),
+        createdAt: z.string(),
+        updatedAt: z.string(),
+      }),
+      {
+        loadStrategy: LoadStrategy.Eager,
+        name: "OmittedIssue",
+        omit: ["createdAt", "updatedAt"],
+      },
+    );
+    expect(Object.keys(def.fields)).toEqual(["id", "title"]);
+  });
+
+  it("propagates omission to the inferred record shape", () => {
+    const schema = defineSchema({
+      entities: {
+        issue: entityFromZod(
+          z.object({
+            id: z.string(),
+            title: z.string(),
+            createdAt: z.string(),
+          }),
+          {
+            loadStrategy: LoadStrategy.Eager,
+            name: "OmittedTypedIssue",
+            omit: ["createdAt"],
+          },
+        ),
+      },
+      links: {},
+    });
+    expect(Object.keys(schema.entities.issue.fields)).not.toContain(
+      "createdAt",
+    );
+    type Issue = InferEntity<typeof schema, "issue">;
+    expectTypeOf<Issue>().toHaveProperty("id");
+    expectTypeOf<Issue>().toHaveProperty("title");
+    expectTypeOf<Issue>().not.toHaveProperty("createdAt");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// entitiesFromZod — bulk authoring from a Zod module
+// ---------------------------------------------------------------------------
+
+describe("entitiesFromZod — module-level mapping", () => {
+  const ZodModule = {
+    team: z.object({ id: z.string(), name: z.string() }),
+    issue: z.object({
+      id: z.string(),
+      title: z.string(),
+      teamID: z.string(),
+      createdAt: z.string(),
+    }),
+  };
+
+  it("maps every key to an EntityDef with shared loadStrategy", () => {
+    const entities = entitiesFromZod(ZodModule, {
+      loadStrategy: LoadStrategy.Eager,
+    });
+    expect(entities.team.loadStrategy).toBe(LoadStrategy.Eager);
+    expect(entities.issue.loadStrategy).toBe(LoadStrategy.Eager);
+    expect(Object.keys(entities.team.fields)).toEqual(["id", "name"]);
+    expect(Object.keys(entities.issue.fields).sort()).toEqual([
+      "createdAt",
+      "id",
+      "teamID",
+      "title",
+    ]);
+  });
+
+  it("threads autoIndex and omit uniformly", () => {
+    const entities = entitiesFromZod(ZodModule, {
+      loadStrategy: LoadStrategy.Eager,
+      autoIndex: "ID",
+      omit: ["createdAt"],
+    });
+    expect(entities.issue.fields.teamID.meta.indexed).toBe(true);
+    expect(Object.keys(entities.issue.fields)).toEqual([
+      "id",
+      "title",
+      "teamID",
+    ]);
+  });
+
+  it("composes with defineSchema and compiles", () => {
+    const schema = defineSchema({
+      entities: entitiesFromZod(ZodModule, {
+        loadStrategy: LoadStrategy.Eager,
+        autoIndex: "ID",
+        omit: ["createdAt"],
+      }),
+      links: {},
+    });
+    expect(() => compileSchema(schema)).not.toThrow();
+    type IK = IndexedFieldKeys<typeof schema, "issue">;
+    expectTypeOf<IK>().toEqualTypeOf<"teamID">();
   });
 });

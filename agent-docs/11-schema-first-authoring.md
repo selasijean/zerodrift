@@ -372,6 +372,36 @@ entityFromZod(ZodIssue, {
 
 Override keys are constrained to fields actually declared on the Zod object, so typos surface at compile time.
 
+Two conveniences cut repetition when the Zod source is generated (OpenAPI, gRPC, …):
+
+```typescript
+entityFromZod(ZodIssue, {
+  loadStrategy: LoadStrategy.Eager,
+  autoIndex: "ID",                    // `*ID` fields get `.indexed()` automatically
+  omit: ["createdAt", "updatedAt"],   // drop transport-only fields the DTO carries
+});
+```
+
+`autoIndex` is a suffix match (string, not regex) so the matched keys propagate to the entity's TS type — `IndexedFieldKeys`, `getByIndex`, and `useRecordsByIndex` see them the same as an explicit `.indexed()`. An explicit `fields.<key>` builder override suppresses the auto-index for that key; a chained function override (`(b) => …`) runs after the auto-index so its `.indexed()` is idempotent.
+
+For a whole generated module, `entitiesFromZod` calls `entityFromZod` per key with shared opts:
+
+```typescript
+import { entitiesFromZod } from "zerodrift/schema";
+import * as ZodModule from "./generated/zod-schemas";   // { team: ZodTeam, issue: ZodIssue, … }
+
+const schema = defineSchema({
+  entities: entitiesFromZod(ZodModule, {
+    loadStrategy: LoadStrategy.Eager,
+    autoIndex: "ID",
+    omit: ["createdAt", "updatedAt"],
+  }),
+  links: { /* link() still owns the graph */ },
+});
+```
+
+The registry name for each entity is the PascalCased input key (auto-derived by `compileSchema`), so no per-entity `name` is needed. Drop down to `entityFromZod` for the handful that need their own `fields` map or a distinct `loadStrategy`.
+
 ## Naming record / input types
 
 Three helpers, all parameterized by the schema and an entity key, give first-class names for the shapes the store works in. Prefer them over re-deriving from `ReturnType<…peek>` at call sites:
