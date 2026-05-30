@@ -487,7 +487,7 @@ describe("entityFromZod — per-field overrides", () => {
     entityFromZod(ZodOverridable, {
       loadStrategy: LoadStrategy.Eager,
       fields: {
-        // @ts-expect-error override keys must exist on the Zod object
+        // @ts-expect-error Error: 'typo' is not a field declared on the Zod object passed to entityFromZod
         typo: (b) => b.indexed(),
       },
     });

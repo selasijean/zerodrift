@@ -153,10 +153,17 @@ type EntityFromZodFieldOverrides<Z extends z.ZodObject> = {
     | ((auto: AutoFieldFromZod<K, Z["shape"][K]>) => unknown);
 };
 
-type NoExtraZodFieldKeys<Z extends z.ZodObject, F> = Record<
-  Exclude<keyof F, keyof Z["shape"] & string>,
-  never
->;
+/**
+ * Maps any `opts.fields` key that isn't declared on the Zod object to a
+ * branded error-string type. The intersection with the override map then
+ * forces TS to surface "is not assignable to type \"Error: 'foo' is not a
+ * field…\"" — naming the offender — instead of the bare "not assignable to
+ * type 'never'" the previous `Record<…, never>` form produced.
+ */
+type NoExtraZodFieldKeys<Z extends z.ZodObject, F> = {
+  [K in keyof F as K extends keyof Z["shape"] ? never : K]: `Error: '${K &
+    string}' is not a field declared on the Zod object passed to entityFromZod`;
+};
 
 /**
  * Resolve the field type contributed by an override entry. Functions are
