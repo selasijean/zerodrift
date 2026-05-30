@@ -12,6 +12,7 @@ import {
   type EntityFromZodOpts,
   type FieldBuilder,
   type IndexedFieldKeys,
+  type InferCreateInput,
   type InferEntity,
 } from "@zerodrift/schema";
 import { ModelRegistry } from "@zerodrift/ModelRegistry";
@@ -136,6 +137,54 @@ describe("entityFromZod — TS field inference", () => {
     expectTypeOf<Layer["id"]>().toEqualTypeOf<string>();
     expectTypeOf<Layer["name"]>().toEqualTypeOf<string>();
     expectTypeOf<Layer["opacity"]>().toEqualTypeOf<number>();
+  });
+
+  it("treats the Zod `id` key as the PK so it is optional in InferCreateInput", () => {
+    const schema = defineSchema({
+      entities: {
+        need: entityFromZod(
+          z.object({
+            id: z.uuid(),
+            orgID: z.string(),
+            itemName: z.string(),
+          }),
+          { loadStrategy: LoadStrategy.Eager, name: "ZodPkNeed" },
+        ),
+      },
+      links: {},
+    });
+
+    expect(schema.entities.need.fields.id.meta.kind).toBe("id");
+
+    type CreateNeed = InferCreateInput<typeof schema, "need">;
+    expectTypeOf<CreateNeed["id"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<CreateNeed["orgID"]>().toEqualTypeOf<string>();
+    expectTypeOf<CreateNeed["itemName"]>().toEqualTypeOf<string>();
+
+    const ok: CreateNeed = { orgID: "o1", itemName: "x" };
+    expect(ok.itemName).toBe("x");
+  });
+
+  it("preserves PK semantics when `id` is chained via a function override", () => {
+    const schema = defineSchema({
+      entities: {
+        need: entityFromZod(
+          z.object({ id: z.string(), name: z.string() }),
+          {
+            loadStrategy: LoadStrategy.Eager,
+            name: "ZodPkChainedId",
+            fields: { id: (b) => b.indexed() },
+          },
+        ),
+      },
+      links: {},
+    });
+
+    expect(schema.entities.need.fields.id.meta.kind).toBe("id");
+    expect(schema.entities.need.fields.id.meta.indexed).toBe(true);
+
+    type CreateNeed = InferCreateInput<typeof schema, "need">;
+    expectTypeOf<CreateNeed["id"]>().toEqualTypeOf<string | undefined>();
   });
 
   it("recovers the Zod field type from chained function overrides", () => {

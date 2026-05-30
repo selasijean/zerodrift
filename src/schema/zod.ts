@@ -1,6 +1,11 @@
 import type { z } from "zod";
 import { fields, entity, rebuildFieldBuilder } from "./builders.js";
-import type { AnyFieldBuilder, EntityDef, FieldBuilder } from "./types.js";
+import type {
+  AnyFieldBuilder,
+  EntityDef,
+  FieldBuilder,
+  FieldMeta,
+} from "./types.js";
 
 /**
  * Minimal structural shape used to walk a Zod schema at runtime without
@@ -84,6 +89,16 @@ export function fromZod<Z extends z.ZodType>(
 }
 
 /**
+ * Auto-derived `FieldBuilder` type for a Zod-object key. The `id` key is
+ * special-cased to carry `{kind: "id"}` so `InferCreateInput` can treat it
+ * as optional (BaseModel auto-assigns a UUID) — matching the runtime, which
+ * routes the `id` key through `fields.id()` instead of `fromZod`.
+ */
+type AutoFieldFromZod<K, T> = K extends "id"
+  ? FieldBuilder<string, FieldMeta & { kind: "id" }>
+  : FieldBuilder<T>;
+
+/**
  * Per-field override for `entityFromZod`. Either a chaining function
  * (modifies the auto-derived `FieldBuilder`) or a full `FieldBuilder`
  * (replaces it — useful for FKs and other shapes Zod can't model).
@@ -95,7 +110,7 @@ export type EntityFromZodFieldOverride<AutoT = unknown> =
 type EntityFromZodFieldOverrides<Z extends z.ZodObject> = {
   [K in keyof z.infer<Z> & string]?:
     | AnyFieldBuilder
-    | ((auto: FieldBuilder<z.infer<Z>[K]>) => unknown);
+    | ((auto: AutoFieldFromZod<K, z.infer<Z>[K]>) => unknown);
 };
 
 type NoExtraZodFieldKeys<Z extends z.ZodObject, F> = Record<
@@ -108,17 +123,19 @@ type NoExtraZodFieldKeys<Z extends z.ZodObject, F> = Record<
  * unwrapped via their inferred return type so chained modifiers like
  * `.indexed()` carry their narrowed `M` into the entity's inferred fields;
  * direct `FieldBuilder` overrides are used as-is. When no override is
- * provided the auto-derived `FieldBuilder<AutoT>` from Zod stands.
+ * provided the auto-derived `Auto` field stands.
  */
-type FieldFromOverride<O, AutoT> = O extends (...args: never[]) => infer R
+type FieldFromOverride<O, Auto> = O extends (...args: never[]) => infer R
   ? R extends FieldBuilder<infer RT, infer RM>
     ? [unknown] extends [RT]
-      ? FieldBuilder<AutoT, RM>
+      ? Auto extends FieldBuilder<infer AT, FieldMeta>
+        ? FieldBuilder<AT, RM>
+        : never
       : R
-    : FieldBuilder<AutoT>
+    : Auto
   : O extends AnyFieldBuilder
     ? O
-    : FieldBuilder<AutoT>;
+    : Auto;
 
 /**
  * Per-key merge of the Zod-inferred fields with `opts.fields` overrides.
@@ -127,8 +144,8 @@ type FieldFromOverride<O, AutoT> = O extends (...args: never[]) => infer R
  */
 type MergedFieldsFromZodObject<Z extends z.ZodObject, F> = {
   [K in keyof z.infer<Z>]: K extends keyof F
-    ? FieldFromOverride<F[K], z.infer<Z>[K]>
-    : FieldBuilder<z.infer<Z>[K]>;
+    ? FieldFromOverride<F[K], AutoFieldFromZod<K, z.infer<Z>[K]>>
+    : AutoFieldFromZod<K, z.infer<Z>[K]>;
 };
 
 /** Non-`fields` portion of the opts — shared across the public type and
@@ -156,9 +173,9 @@ export interface EntityFromZodOpts<Z extends z.ZodObject = z.ZodObject>
    *     });
    */
   fields?: {
-    [K in keyof z.infer<Z> & string]?: EntityFromZodFieldOverride<
-      z.infer<Z>[K]
-    >;
+    [K in keyof z.infer<Z> & string]?:
+      | AnyFieldBuilder
+      | ((auto: AutoFieldFromZod<K, z.infer<Z>[K]>) => AnyFieldBuilder);
   };
 }
 
