@@ -368,17 +368,6 @@ Deeper material lives in [agent-docs/](agent-docs/):
 - **Reference server**: Go, Gin, Bun ORM, Postgres (LISTEN/NOTIFY), pgx
 - **Protocol**: append-only changelog, monotonic sync id, sync group filtering
 
-## Upgrading from a vendored copy
-
-If you're moving from a pre-published `sync-engine` source copy onto `zerodrift` from npm, the API-consolidation pass before `v1.0.0` renamed a few enum members. Most adopters only hit `LoadStrategy`:
-
-| Old name | New name |
-|---|---|
-| `LoadStrategy.Instant` | `LoadStrategy.Eager` |
-| `LoadStrategy.Local` | `LoadStrategy.LocalOnly` |
-
-`Eager` / `Lazy` / `Partial` / `LocalOnly` / `Ephemeral` are the only members on the published enum — find-and-replace the old names. Hook signatures, `<SyncProvider>` shape, and the schema authoring surface didn't change in that pass.
-
 ## Acknowledgments
 
 zerodrift was informed by public writing and talks on local-first sync
