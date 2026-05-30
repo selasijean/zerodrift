@@ -1,6 +1,6 @@
 {
   "name": "zerodrift",
-  "version": "1.0.4",
+  "version": "1.1.0",
   "private": false,
   "description": "A TypeScript local-first sync engine: synchronous in-memory reads, optimistic writes, realtime SSE sync, offline IndexedDB persistence. Runs in the browser and in Node.",
   "license": "MIT",
