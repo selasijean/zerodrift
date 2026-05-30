@@ -394,16 +394,17 @@ type IssueUpdate = InferUpdateInput<typeof schema, "issue">;  // store.issue.pat
 
 In `zerodrift/react`:
 
-Pass the `store.<entity>` namespace as the **handle** to the same read hooks
-used everywhere else (a decorator class is the other handle form):
+Wrap the app in `<SyncProvider schema={schema} config={…}>` once — that runs `createStore` synchronously between StoreManager construction and `bootstrap()`, registering schema entities before the first fetch (see [08-react-integration.md § `schema` prop](08-react-integration.md#schema-prop--schema-first-wiring)). Inside children, pull the typed store with `useStore<typeof schema>()` and pass `store.<entity>` namespaces as the **handle** to the read hooks (a decorator class is the other handle form):
 
 ```typescript
 import {
   useRecord,
   useRecords,
   useRecordsByIndex,
+  useStore,
 } from "zerodrift/react";
 
+const store = useStore<typeof schema>();
 const { data: issue } = useRecord(store.issue, issueId);
 const { data: teams } = useRecords(store.team);
 const { data: teamIssues } = useRecordsByIndex(store.issue, "teamId", teamId);

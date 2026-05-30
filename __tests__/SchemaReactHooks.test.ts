@@ -9,9 +9,11 @@ import {
   type EntityNamespace,
 } from "@zerodrift/schema";
 import {
+  SyncProvider,
   useRecord,
   useRecords,
   useRecordsByIndex,
+  useStore,
 } from "../src/react/index";
 
 const reactSchema = defineSchema({
@@ -100,5 +102,36 @@ describe("useRecord* hook signatures (namespace handles)", () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         any
       >>();
+  });
+});
+
+describe("useStore<S>() — typed schema-first store access", () => {
+  it("returns the EntityStore matching the schema generic", () => {
+    type S = ReturnType<typeof useStore<typeof reactSchema>>;
+    expectTypeOf<S>().toEqualTypeOf<Store>();
+    expectTypeOf<S["rxIssue"]>().toEqualTypeOf<IssueNs>();
+    expectTypeOf<S["rxTeam"]>().toEqualTypeOf<TeamNs>();
+    // Hands off to the same read hooks — namespace handle compatibility is
+    // the contract that ties the provider, store, and hook surface together.
+    expectTypeOf(useRecord<S["rxIssue"]>).parameter(0).toEqualTypeOf<IssueNs>();
+  });
+});
+
+describe("<SyncProvider> prop combinations", () => {
+  it("rejects `extensions` without `schema` at the type level", () => {
+    type Props = Parameters<typeof SyncProvider>[0];
+    // @ts-expect-error extensions are only valid when schema is also provided
+    const _bad: Props = {
+      config: {
+        workspaceId: "ws",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        transport: { bootstrapFetcher: async () => ({}) as any },
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      extensions: [{} as any],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      children: null as any,
+    };
+    void _bad;
   });
 });

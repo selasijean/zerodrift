@@ -23,6 +23,16 @@ import { BootstrapPhase } from "../core/types.js";
 import { LazyCollectionBase, BackRef } from "../core/LazyCollection.js";
 import { readFk } from "../core/ObjectPool.js";
 import type { BaseModel } from "../core/BaseModel.js";
+import {
+  createStore,
+  entityNamespaceRegistryName,
+  type EntityNamespace,
+  type EntityStore,
+  type RecordWithExtensions,
+} from "../schema/createStore.js";
+import type { ExtensionDescriptor } from "../schema/extend.js";
+import type { EntityKey, IndexedFieldKeys } from "../schema/infer.js";
+import type { SchemaDef } from "../schema/types.js";
 
 // ---------------------------------------------------------------------------
 // Context
@@ -39,14 +49,21 @@ const SyncContext = createContext<{
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   sm: StoreManager<any>;
   status: SyncStatus;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  store?: EntityStore<any, any>;
 } | null>(null);
 
 // ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------
 
-export function SyncProvider<TContext = unknown>({
+export function SyncProvider<
+  TContext = unknown,
+  S extends SchemaDef = SchemaDef,
+>({
   config,
+  schema,
+  extensions,
   context,
   children,
   fallback,
@@ -59,13 +76,26 @@ export function SyncProvider<TContext = unknown>({
   children: React.ReactNode;
   /** Shown while bootstrap is in progress. */
   fallback?: React.ReactNode;
-}) {
+} & (
+  | { schema?: undefined; extensions?: undefined }
+  | {
+      /** Schema-first wiring. Read the store back with `useStore<typeof schema>()`. */
+      schema: S;
+      extensions?: readonly ExtensionDescriptor<S>[];
+    }
+)) {
   const [status, setStatus] = useState<SyncStatus>({
     phase: BootstrapPhase.Idle,
   });
   const smRef = useRef<StoreManager<TContext> | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const storeRef = useRef<EntityStore<any, any> | undefined>(undefined);
   const cfgRef = useRef(config);
   cfgRef.current = config;
+  const schemaRef = useRef(schema);
+  schemaRef.current = schema;
+  const extensionsRef = useRef(extensions);
+  extensionsRef.current = extensions;
 
   // Detect bfcache restores. When a tab is duplicated (or the user navigates
   // back/forward) the browser may restore the page from its back/forward cache
@@ -106,6 +136,15 @@ export function SyncProvider<TContext = unknown>({
     if (contextRef.current !== undefined) {
       sm.setContext(contextRef.current);
     }
+    // createStore registers schema entities into ModelRegistry — must
+    // run before bootstrap() so the first fetch sees them.
+    if (schemaRef.current != null) {
+      storeRef.current = createStore({
+        schema: schemaRef.current,
+        storeManager: sm,
+        extensions: extensionsRef.current,
+      });
+    }
     smRef.current = sm;
     sm.bootstrap().catch((err) => {
       if (active) {
@@ -116,6 +155,7 @@ export function SyncProvider<TContext = unknown>({
       active = false;
       sm.teardown();
       smRef.current = null;
+      storeRef.current = undefined;
     };
   }, [cfgRef.current.workspaceId]);
 
@@ -138,7 +178,9 @@ export function SyncProvider<TContext = unknown>({
     return <>{fallback}</>;
   }
   return (
-    <SyncContext.Provider value={{ sm: smRef.current, status }}>
+    <SyncContext.Provider
+      value={{ sm: smRef.current, status, store: storeRef.current }}
+    >
       {children}
     </SyncContext.Provider>
   );
@@ -158,6 +200,18 @@ export function useSyncEngine() {
 
 export function useBootstrapStatus(): SyncStatus {
   return useSyncEngine().status;
+}
+
+/** Read the schema-first store from context — `useStore<typeof schema>()`. */
+export function useStore<
+  S extends SchemaDef,
+  const Exts extends readonly ExtensionDescriptor<S>[] = readonly [],
+>(): EntityStore<S, Exts> {
+  const ctx = useSyncEngine();
+  if (ctx.store == null) {
+    throw new Error("useStore() requires <SyncProvider schema={…}>.");
+  }
+  return ctx.store as EntityStore<S, Exts>;
 }
 
 /** Subscribe to a model type's pool changes and read a snapshot synchronously.
@@ -545,15 +599,6 @@ function useStableCallback<TParams extends unknown[], TResult>(
 // For namespace handles the index key is constrained to the schema's
 // `.indexed()` fields; for class handles it's `string`.
 // ---------------------------------------------------------------------------
-
-import {
-  entityNamespaceRegistryName,
-  type EntityNamespace,
-  type RecordWithExtensions,
-} from "../schema/createStore.js";
-import type { ExtensionDescriptor } from "../schema/extend.js";
-import type { EntityKey, IndexedFieldKeys } from "../schema/infer.js";
-import type { SchemaDef } from "../schema/types.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyNamespace = EntityNamespace<any, any, any>;

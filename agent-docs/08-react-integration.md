@@ -22,6 +22,22 @@ Wrap your app in `SyncProvider`. It creates the `StoreManager`, runs bootstrap, 
 - Once `Ready`, children render and have full access to the engine
 - On unmount, `sm.teardown()` closes the SSE connection and cleans up
 
+### `schema` prop — schema-first wiring
+
+Pass `schema={schema}` (and optionally `extensions={...}`) so the provider runs `createStore({schema, storeManager, extensions})` between `new StoreManager(...)` and `sm.bootstrap()`. That registration order is load-bearing — without it the first bootstrap fetch finds no schema entities. Children read the typed store with `useStore<typeof schema>()`:
+
+```typescript
+<SyncProvider schema={schema} config={{ workspaceId, transport: { bootstrapFetcher } }}>
+  <App />
+</SyncProvider>
+
+// in any child:
+const store = useStore<typeof schema>();
+const { data: issue } = useRecord(store.issue, issueId);
+```
+
+If you also pass `extensions={exts}` to the provider, pass them as the second generic so the typed store includes the extended members: `useStore<typeof schema, typeof exts>()`. Decorator-only setups omit `schema`; `useStore()` throws there. The two paths can also coexist — pass `schema` and side-effect-import decorator models in the same setup; both end up in the shared `ModelRegistry`.
+
 ### `context` prop — runtime input for `identifierFn`
 
 `SyncProvider` is generic in `TContext`. When the consumer config supplies an `identifierFn`, the `context` prop is the live value forwarded into it.

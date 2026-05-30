@@ -157,15 +157,17 @@ Both authoring paths compile to the same registry, so schema entities and decora
 
 ## React quick start
 
-Wrap your app in `<SyncProvider>` once. Import your model file as a side effect so decorators run before bootstrap.
+Wrap your app in `<SyncProvider>` once. For the decorator path, import your model file as a side effect so decorators run before bootstrap; for the schema-first path, pass `schema={schema}` and the provider registers entities before fetching.
 
 ```tsx
 import { SyncProvider } from "zerodrift/react";
-import "./models";
+import { schema } from "./schema";   // schema-first
+// import "./models";                  // or: decorator path — side-effect import
 
 export default function Providers({ children }) {
   return (
     <SyncProvider
+      schema={schema}
       config={{
         workspaceId: "workspace-123",
         transport: {
@@ -192,6 +194,16 @@ export default function Providers({ children }) {
     </SyncProvider>
   );
 }
+```
+
+In schema-first children, pull the typed store with `useStore<typeof schema>()` (add `typeof extensions` as the second generic if you also passed extensions):
+
+```tsx
+import { useStore } from "zerodrift/react";
+import { schema } from "./schema";
+
+const store = useStore<typeof schema>();
+const { data: issue } = useRecord(store.issue, issueId);
 ```
 
 Common reads and writes. The read hooks take a **handle** — a model class
