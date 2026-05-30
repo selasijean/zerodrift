@@ -223,6 +223,23 @@ const sm = new StoreManager({
 });
 ```
 
+## TransportConfig reference
+
+`StoreManagerConfig.transport: TransportConfig` is the single place every server-touching wire is plugged in — `bootstrapFetcher` is the only required field, the rest are opt-in. The full shape (exported from `zerodrift`):
+
+| Field | Type | Purpose |
+|---|---|---|
+| `bootstrapFetcher` | `BootstrapFetcher` | **Required.** `async (type, options) => BootstrapResponse`. Called for full and partial bootstraps; the engine picks `type` based on persisted `__meta`. Receives `lastSyncId`, `syncGroups`, `onlyModels` so the server can tailor the payload. |
+| `transactionSender` | `TransactionSender?` | `async (batch) => BatchResponse`. Called for every committed batch (`save()` / `batch()` / `atomic()` / `runUndoable()`). Omit for read-only clients. |
+| `syncUrl` | `string?` | SSE endpoint for live deltas. Engine appends `?lastSyncId=…&syncGroups=…&onlyModels=…`. Omit to disable live sync (bootstrap-only). |
+| `bootstrapSyncGroups` | `() => Promise<string[]>?` | Seeds `dbMeta.subscribedSyncGroups` before the first bootstrap so every `bootstrapFetcher` call sees the union (persisted ∪ this hook ∪ server-supplied). Failure is fatal. Skip if the server owns scope. |
+| `modelStreams` | `ModelStreamConfig[]?` | Secondary SSE endpoints (e.g. a calc service). Each is gated by `onlyModels`, applies updates pool-first, and writes to IDB unless the model is `Ephemeral`. |
+| `sseClientFactory` | `SSEClientFactory?` | Override the default browser `EventSource`. Use `(url) => new EventSource(url)` from `eventsource` for Node/agents. When set, `sseInit` is ignored. |
+| `sseInit` | `EventSourceInit?` | Forwarded to the default `EventSource` (e.g. `{ withCredentials: true }`). Applies to the main stream and every `modelStreams` entry. |
+| `syncTransform` | `SyncMessageTransform?` | `(raw) => DeltaPacket \| null`. Use when the backend envelope diverges from the canonical packet. Return `null` to drop a message. |
+
+`BootstrapFetcher`, `TransactionSender`, `BootstrapResponse`, `BatchResponse`, `ModelStreamConfig`, `SyncMessageTransform`, `SSEClientFactory`, and `EngineErrorContext` are all re-exported from the root `zerodrift` entry — type-import them when wiring custom transports. The engine normalizes the grouped config (`transport` / `loading` / `persistence` / `hooks` / `advanced`) into one flat `NormalizedConfig` exactly once, in the constructor.
+
 ## Ephemeral Models in Delta Processing
 
 When `SyncConnection` processes a delta for an `Ephemeral` model, it skips IDB writes and deletes. The model is updated in the ObjectPool only. This also applies to cascade deletes — if a deleted model has ephemeral children via `@BackReference` or `@Reference({ onDelete: "cascade" })`, those children are removed from the pool without touching IDB.
