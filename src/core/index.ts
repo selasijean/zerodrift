@@ -87,6 +87,7 @@ export type {
 export type {
   SyncAction,
   DeltaPacket,
+  SSEEndpoint,
   SyncMessageTransform,
 } from "./SyncConnection.js";
 export type { ModelUpdate, ModelStreamMessageTransform } from "./ModelStream.js";

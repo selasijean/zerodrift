@@ -30,6 +30,7 @@ import { LoadStrategy, PropertyType, type ModelMeta } from "./types.js";
 import {
   BaseSSEConnection,
   type SSEClientFactory,
+  type SSEEndpoint,
   type SSEErrorReporter,
 } from "./BaseSSEConnection.js";
 
@@ -37,6 +38,7 @@ import {
 export {
   type SSEClient,
   type SSEClientFactory,
+  type SSEEndpoint,
   type SSEErrorReporter,
   createBrowserSSEFactory,
 } from "./BaseSSEConnection.js";
@@ -137,7 +139,7 @@ export class SyncConnection extends BaseSSEConnection {
   private recordInflightDelete?: (modelName: string, id: string) => void;
 
   constructor(
-    url: string,
+    url: SSEEndpoint,
     private database: StorageAdapter,
     private pool: ObjectPool,
     private queue: TransactionQueue,
@@ -156,11 +158,8 @@ export class SyncConnection extends BaseSSEConnection {
     const meta = this.database.currentMeta;
     const lastSyncId = meta?.lastSyncId ?? 0;
     const syncGroups = encodeCsvList(meta?.subscribedSyncGroups ?? []);
-    // Tell the server which models we're subscribed to (catchup + live
-    // stream; absent → no filter). Union of always-subscribed (Eager +
-    // Ephemeral, see ModelRegistry) with adapter-tracked loadedModels.
-    // Sort for a stable URL — equivalent sets must produce identical URLs
-    // so the engine doesn't churn reconnects when iteration order shifts.
+    // Sort the union — equivalent sets must produce identical URLs so the
+    // engine doesn't churn reconnects when iteration order shifts.
     const subscribed = [
       ...new Set([
         ...ModelRegistry.alwaysSubscribedModelNames(),
@@ -169,7 +168,11 @@ export class SyncConnection extends BaseSSEConnection {
     ].sort();
     const onlyModels =
       subscribed.length > 0 ? `&onlyModels=${encodeCsvList(subscribed)}` : "";
-    return `${this.url}?lastSyncId=${lastSyncId}&syncGroups=${syncGroups}${onlyModels}`;
+    const base = this.resolveUrl();
+    // Thunk endpoints often already carry query params (tenant, cursor, …);
+    // pick `&` when the base is already in query-string mode.
+    const sep = base.includes("?") ? "&" : "?";
+    return `${base}${sep}lastSyncId=${lastSyncId}&syncGroups=${syncGroups}${onlyModels}`;
   }
 
   protected onMessage(data: string): void {

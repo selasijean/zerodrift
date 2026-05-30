@@ -46,6 +46,7 @@ import {
   encodeCsvList,
   type DeltaPacket,
   type SSEClientFactory,
+  type SSEEndpoint,
   type SyncMessageTransform,
   createBrowserSSEFactory,
 } from "./SyncConnection.js";
@@ -130,7 +131,7 @@ export type BootstrapFetcher = (
 ) => Promise<BootstrapResponse>;
 
 export interface ModelStreamConfig {
-  url: string;
+  url: SSEEndpoint;
   onStatusChange?: (connected: boolean) => void;
   /**
    * Use when the backend sends a different envelope than the engine's
@@ -176,7 +177,10 @@ export type OnDemandConfig =
 export interface TransportConfig {
   bootstrapFetcher: BootstrapFetcher;
   transactionSender?: TransactionSender;
-  syncUrl?: string;
+  /** SSE endpoint for live deltas — a static string, or a thunk evaluated
+   * on every (re)connect (so callers can fold in cursors from localStorage,
+   * auth tokens in the path, etc., without rebuilding the engine). */
+  syncUrl?: SSEEndpoint;
   /**
    * Optional async hook that returns the user's sync-group memberships
    * before any bootstrap fetch runs. The returned groups are append-only

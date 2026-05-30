@@ -76,6 +76,36 @@ describe("ModelStream", () => {
 
       stream.disconnect();
     });
+
+    it("accepts a thunk URL and re-evaluates it on every (re)connect", () => {
+      let cursor = 0;
+      const urlThunk = vi.fn(() => `http://calc/events?cursor=${++cursor}`);
+      const seenUrls: string[] = [];
+      const factory: SSEClientFactory = (url) => {
+        seenUrls.push(url);
+        return controllableSSEClient();
+      };
+      const stream = new ModelStream(
+        urlThunk,
+        adapter,
+        pool,
+        undefined,
+        factory,
+      );
+
+      stream.connect();
+      stream.reconnect();
+      stream.reconnect();
+
+      expect(urlThunk).toHaveBeenCalledTimes(3);
+      expect(seenUrls).toEqual([
+        "http://calc/events?cursor=1",
+        "http://calc/events?cursor=2",
+        "http://calc/events?cursor=3",
+      ]);
+
+      stream.disconnect();
+    });
   });
 
   describe("applyUpdate — upsert", () => {

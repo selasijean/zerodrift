@@ -14,6 +14,9 @@ export type SSEErrorReporter = (
   context: EngineErrorContext,
 ) => void;
 
+/** Either a fixed URL or a thunk re-evaluated on every (re)connect. */
+export type SSEEndpoint = string | (() => string);
+
 export const createBrowserSSEFactory =
   (init?: EventSourceInit): SSEClientFactory =>
   (url) =>
@@ -25,7 +28,7 @@ export abstract class BaseSSEConnection {
   private stopped = false;
 
   constructor(
-    protected url: string,
+    protected url: SSEEndpoint,
     private sseClientFactory: SSEClientFactory = createBrowserSSEFactory(),
     private reportError?: SSEErrorReporter,
   ) {}
@@ -61,8 +64,15 @@ export abstract class BaseSSEConnection {
     return this.eventSource != null;
   }
 
+  /** Resolve the endpoint to a concrete string. Subclasses building dynamic
+   * URLs (e.g. appending query params) must read through this instead of
+   * `this.url` directly so a thunk endpoint is re-evaluated on every connect. */
+  protected resolveUrl(): string {
+    return typeof this.url === "function" ? this.url() : this.url;
+  }
+
   protected buildUrl(): string {
-    return this.url;
+    return this.resolveUrl();
   }
 
   protected abstract onMessage(data: string): void;
@@ -81,7 +91,20 @@ export abstract class BaseSSEConnection {
       this.onClose();
     }
 
-    const url = this.buildUrl();
+    // buildUrl() can throw when the endpoint is a thunk (e.g. cursor read
+    // crashes). Catch + schedule a reconnect so a transient failure doesn't
+    // permanently kill the stream.
+    let url: string;
+    try {
+      url = this.buildUrl();
+    } catch (err) {
+      this.reportError?.(toError(err), {
+        kind: "sseConstruction",
+        url: "<endpoint-thunk-threw>",
+      });
+      this.scheduleReconnect();
+      return;
+    }
 
     try {
       this.eventSource = this.sseClientFactory(url);

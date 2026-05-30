@@ -10,6 +10,7 @@ import { ModelRegistry } from "./ModelRegistry.js";
 import {
   BaseSSEConnection,
   type SSEClientFactory,
+  type SSEEndpoint,
   type SSEErrorReporter,
 } from "./BaseSSEConnection.js";
 import { LoadStrategy } from "./types.js";
@@ -33,7 +34,7 @@ export class ModelStream extends BaseSSEConnection {
   private processing = false;
 
   constructor(
-    url: string,
+    url: SSEEndpoint,
     private database: StorageAdapter,
     private pool: ObjectPool,
     private onStatusChange?: (connected: boolean) => void,

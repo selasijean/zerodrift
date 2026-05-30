@@ -892,4 +892,79 @@ describe("SyncConnection", () => {
       expect(meta!.lastSyncId).toBe(12);
     });
   });
+
+  describe("thunk URL", () => {
+    it("re-evaluates the URL thunk on every (re)connect so dynamic state flows in", () => {
+      vi.useFakeTimers();
+      let connectCount = 0;
+      const urlThunk = vi.fn(
+        () => `http://x.test/events?cursor=${++connectCount}`,
+      );
+      const client = controllableSSEClient();
+      const factory = vi.fn(makeFactory(client));
+      const dynConn = makeSyncConnection({
+        db,
+        pool,
+        queue,
+        url: urlThunk,
+        sseClientFactory: factory,
+      });
+      try {
+        dynConn.connect();
+        expect(factory).toHaveBeenCalledTimes(1);
+        expect(factory.mock.calls[0][0]).toContain("cursor=1");
+        // Engine appends its own query params using `&` when the thunk
+        // already returned a URL with `?`.
+        expect(factory.mock.calls[0][0]).toMatch(/cursor=1&lastSyncId=/);
+
+        client.triggerError(); // schedules reconnect via setTimeout(3000)
+        vi.runAllTimers();
+
+        expect(factory).toHaveBeenCalledTimes(2);
+        expect(factory.mock.calls[1][0]).toContain("cursor=2");
+        expect(urlThunk.mock.calls.length).toBeGreaterThanOrEqual(2);
+      } finally {
+        dynConn.disconnect();
+        vi.useRealTimers();
+      }
+    });
+
+    it("reports a thunk throw via onError and schedules a reconnect instead of dying silently", () => {
+      vi.useFakeTimers();
+      let calls = 0;
+      const urlThunk = vi.fn(() => {
+        calls++;
+        if (calls === 1) {
+          throw new Error("cursor read failed");
+        }
+        return "http://x.test/events";
+      });
+      const reportError = vi.fn();
+      const client = controllableSSEClient();
+      const dynConn = makeSyncConnection({
+        db,
+        pool,
+        queue,
+        url: urlThunk,
+        sseClientFactory: makeFactory(client),
+        reportError,
+      });
+      try {
+        dynConn.connect();
+        expect(reportError).toHaveBeenCalledTimes(1);
+        expect(reportError.mock.calls[0][1]).toMatchObject({
+          kind: "sseConstruction",
+          url: "<endpoint-thunk-threw>",
+        });
+        expect(dynConn.isConnected).toBe(false);
+
+        vi.runAllTimers();
+        expect(dynConn.isConnected).toBe(true);
+        expect(urlThunk).toHaveBeenCalledTimes(2);
+      } finally {
+        dynConn.disconnect();
+        vi.useRealTimers();
+      }
+    });
+  });
 });
