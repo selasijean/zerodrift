@@ -96,6 +96,18 @@ export class RestrictDeleteError extends Error {
   }
 }
 
+/** Per-call options for the `evict*` methods. */
+export interface EvictOptions {
+  /**
+   * Drop matching instances from the in-memory pool only, leaving the rows in
+   * IndexedDB (and the collection-coverage cache) intact. Use it on a layer
+   * switch to free memory now and rehydrate fast from IDB on return — no server
+   * round-trip. Default false: both the pool and IDB are cleared, and a future
+   * load refetches from the server.
+   */
+  keepInDb?: boolean;
+}
+
 export interface BootstrapResponse {
   lastSyncId: number;
   subscribedSyncGroups: string[];
@@ -2276,13 +2288,18 @@ export class StoreManager<TContext = unknown> {
    * Predicate receives hydrated instances (pool) and raw records (IDB); write
    * predicates that test plain property values so they work on both shapes.
    * IDB side is a full cursor scan — prefer `evictByIndex` when the match is
-   * "indexed column equals value".
+   * "indexed column equals value". Pass `{ keepInDb: true }` to release only
+   * the pool and leave the IDB rows cached. Returns the number of rows dropped.
    */
   async evictWhere(
     modelName: string,
     predicate: (m: Record<string, unknown>) => boolean,
+    opts: EvictOptions = {},
   ): Promise<number> {
     const poolCount = this.evictFromPool(modelName, predicate);
+    if (opts.keepInDb === true) {
+      return poolCount;
+    }
     const records = await this.database.readAllModels(modelName);
     const ids = records.filter(predicate).map((r) => r.id as string);
     if (ids.length > 0) {
@@ -2297,13 +2314,21 @@ export class StoreManager<TContext = unknown> {
    * secondary in-memory index by field value). Also clears the matching
    * `loadedCollections` cache key so a future `getOrLoadCollection(modelName,
    * indexKey, value)` re-fetches from the server instead of trusting IDB.
+   * Pass `{ keepInDb: true }` to release only the pool — IDB rows and the
+   * coverage entry are left intact, so the next load rehydrates from IDB.
    */
   async evictByIndex(
     modelName: string,
     indexKey: string,
     value: string,
+    opts: EvictOptions = {},
   ): Promise<void> {
     this.evictFromPool(modelName, (m) => m[indexKey] === value);
+    if (opts.keepInDb === true) {
+      // Pool-only release: IDB rows and the collection-coverage entry stay,
+      // so a future getOrLoadCollection rehydrates from IDB without refetch.
+      return;
+    }
     await this.database.deleteModelsByIndex(modelName, indexKey, value);
     this.partialIndexCoverage.delete(
       StoreManager.collectionKey(modelName, indexKey, value),
@@ -2335,13 +2360,19 @@ export class StoreManager<TContext = unknown> {
    * declare `indexKey` as `indexed: true` are skipped — `deleteModelsByIndex`
    * falls back to a full-store cursor scan when the index is missing, and
    * walking every store at every call is rarely what the caller wants.
+   * `opts` is forwarded to each `evictByIndex` — pass `{ keepInDb: true }` to
+   * release the pool for the whole scope while keeping IDB warm (layer switch).
    */
-  async evictAllByIndex(indexKey: string, value: string): Promise<void> {
+  async evictAllByIndex(
+    indexKey: string,
+    value: string,
+    opts: EvictOptions = {},
+  ): Promise<void> {
     const models = ModelRegistry.allModels().filter(
       (meta) => meta.properties.get(indexKey)?.indexed === true,
     );
     await Promise.all(
-      models.map((meta) => this.evictByIndex(meta.name, indexKey, value)),
+      models.map((meta) => this.evictByIndex(meta.name, indexKey, value, opts)),
     );
   }
 

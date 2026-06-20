@@ -616,6 +616,30 @@ describe("evictByIndex()", () => {
       await manager.database.readModel("TestLayeredDriver", "d3"),
     ).not.toBeNull();
   });
+
+  it("with { keepInDb: true } releases the pool but leaves IDB rows intact", async () => {
+    manager = await makeManager({ initialGroups: ["layer-A"] });
+    await seedLayer(manager, "layer-A", ["d1", "d2"]);
+
+    await manager.evictByIndex("TestLayeredDriver", "layerId", "layer-A", {
+      keepInDb: true,
+    });
+
+    // Pool released…
+    expect(
+      manager.objectPool.getById("TestLayeredDriver", "d1"),
+    ).toBeUndefined();
+    expect(
+      manager.objectPool.getById("TestLayeredDriver", "d2"),
+    ).toBeUndefined();
+    // …but the persistent copy stays, so a switch back rehydrates from IDB.
+    expect(
+      await manager.database.readModel("TestLayeredDriver", "d1"),
+    ).not.toBeNull();
+    expect(
+      await manager.database.readModel("TestLayeredDriver", "d2"),
+    ).not.toBeNull();
+  });
 });
 
 describe("evictAllByIndex()", () => {
@@ -698,6 +722,30 @@ describe("evictWhere()", () => {
     ).toBeNull();
     expect(
       await manager.database.readModel("TestLayeredDriver", "d2"),
+    ).not.toBeNull();
+  });
+
+  it("with { keepInDb: true } counts only pool removals and keeps IDB rows", async () => {
+    manager = await makeManager({ initialGroups: ["layer-A"] });
+    await seedLayer(manager, "layer-A", ["d1", "d2", "d3"]);
+
+    const count = await manager.evictWhere(
+      "TestLayeredDriver",
+      (m) => m.id === "d1" || m.id === "d3",
+      { keepInDb: true },
+    );
+
+    // Pool-only pass: d1/d3 counted once each, no IDB walk.
+    expect(count).toBe(2);
+    expect(
+      manager.objectPool.getById("TestLayeredDriver", "d1"),
+    ).toBeUndefined();
+    expect(manager.objectPool.getById("TestLayeredDriver", "d2")).toBeDefined();
+    expect(
+      await manager.database.readModel("TestLayeredDriver", "d1"),
+    ).not.toBeNull();
+    expect(
+      await manager.database.readModel("TestLayeredDriver", "d3"),
     ).not.toBeNull();
   });
 });

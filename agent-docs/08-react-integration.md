@@ -103,6 +103,22 @@ to the schema's `.indexed()` fields; for a class handle it's `string`.
 counts from frame zero). `reload()` always re-fires regardless of cache
 state; auto-fire on mount is gated so cached data doesn't re-scan IDB.
 
+Every read hook takes an optional trailing `opts: { pause?: boolean }`
+(`useRecord(handle, id, opts)`, `useRecords(handle, ids, opts)`,
+`useRecordsByIndex(handle, key, value, opts)`, `useRelation(relation, opts)`).
+While `pause` is true the hook still reads the pool synchronously — anything
+already resident renders — but holds all fetching: auto-fire *and* `reload()`
+are suppressed until it flips false, at which point a missing entry backfills
+as usual. Use it to defer a fetch until a prerequisite is ready (auth resolved,
+a parent record loaded, a panel actually opened).
+
+```typescript
+// Don't fetch the comments until the panel is open and the issue has loaded.
+const { data: comments } = useRecordsByIndex(store.comment, "issueId", issueId, {
+  pause: !panelOpen || issue == null,
+});
+```
+
 ```typescript
 // Decorator-class handle:
 const { data: issue } = useRecord(Issue, issueId);          // Issue | null

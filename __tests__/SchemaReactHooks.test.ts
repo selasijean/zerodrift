@@ -14,6 +14,7 @@ import {
   useRecords,
   useRecordsByIndex,
   useStore,
+  type UseQueryOptions,
 } from "../src/react/index";
 
 const reactSchema = defineSchema({
@@ -86,6 +87,20 @@ describe("useRecord* hook signatures (namespace handles)", () => {
     expectTypeOf<ValueArg>().toEqualTypeOf<
       string | readonly string[] | null | undefined
     >();
+  });
+
+  it("each read hook takes a trailing UseQueryOptions ({ pause })", () => {
+    // The opts bag is the last positional arg on every read hook.
+    expectTypeOf<Parameters<typeof useRecord<IssueNs>>[2]>().toEqualTypeOf<
+      UseQueryOptions | undefined
+    >();
+    expectTypeOf<Parameters<typeof useRecords<TeamNs>>[2]>().toEqualTypeOf<
+      UseQueryOptions | undefined
+    >();
+    expectTypeOf<Parameters<typeof useRecordsByIndex<IssueNs>>[3]>().toEqualTypeOf<
+      UseQueryOptions | undefined
+    >();
+    expectTypeOf<UseQueryOptions["pause"]>().toEqualTypeOf<boolean | undefined>();
   });
 
   // Tier-0 type assertion: instantiating with a real store.<entity> type is a

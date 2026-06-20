@@ -218,6 +218,12 @@ const { data: teamIssues } = useRecordsByIndex(Issue, "teamId", teamId);
 const { data: comments } = useRelation(issue?.comments);    // a relation
 const { phase } = useBootstrapStatus();
 
+// Every read hook takes an optional trailing `{ pause }` — while true it reads
+// the pool but holds all fetching (auto-fire and reload) until flipped false:
+const { data: c } = useRecordsByIndex(store.comment, "issueId", issueId, {
+  pause: !panelOpen,
+});
+
 issue.title = "New title";
 issue.save();
 

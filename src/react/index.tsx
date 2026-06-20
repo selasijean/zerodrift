@@ -297,6 +297,18 @@ export interface AsyncResource<T> {
   reload: () => Promise<void>;
 }
 
+/** Per-call options shared by the load-aware read hooks. */
+export interface UseQueryOptions {
+  /**
+   * When true, hold all fetching — auto-fire on mount/dependency change *and*
+   * `reload()` are suppressed until it flips false. The hook still reads the
+   * pool synchronously, so anything already resident renders immediately;
+   * only the async backfill waits. Use it to defer a fetch until a prerequisite
+   * is ready (auth resolved, a parent record loaded, a panel actually opened).
+   */
+  pause?: boolean;
+}
+
 /** `isLoaded` for the pool-keyed hooks: ready, not loading, no error — true
  * from frame zero on a pool hit (the loader's auto-fire is gated). */
 const settled = (
@@ -313,10 +325,12 @@ const settled = (
 function useRecordByName<T extends BaseModel>(
   modelName: string,
   id: string | null | undefined,
+  opts?: UseQueryOptions,
 ): AsyncResource<T | null> {
   const { sm, status } = useSyncEngine();
   const pool = sm.objectPool;
   const ready = status.phase === BootstrapPhase.Ready;
+  const pause = opts?.pause ?? false;
 
   const item = usePoolSnapshot(modelName, () =>
     id != null ? (pool.getById(modelName, id) ?? null) : null,
@@ -324,7 +338,7 @@ function useRecordByName<T extends BaseModel>(
 
   const { isLoading, error, reload } = useLoader(
     () => sm.getOrLoadById(modelName, id!),
-    ready && id != null,
+    ready && id != null && !pause,
     `${modelName}:${id ?? ""}`,
     // Skip the load when the pool already has the entry — eager models
     // render with isLoading: false from frame zero.
@@ -347,10 +361,12 @@ function useRecordByName<T extends BaseModel>(
 function useRecordsByName<T extends BaseModel>(
   modelName: string,
   ids?: string[] | null,
+  opts?: UseQueryOptions,
 ): AsyncResource<T[]> {
   const { sm, status } = useSyncEngine();
   const pool = sm.objectPool;
   const ready = status.phase === BootstrapPhase.Ready;
+  const pause = opts?.pause ?? false;
   const idsKey = ids?.join(",") ?? "";
 
   const all = usePoolSnapshot(modelName, () => pool.getAll(modelName));
@@ -367,7 +383,7 @@ function useRecordsByName<T extends BaseModel>(
 
   const { isLoading, error, reload } = useLoader(
     () => sm.getOrLoadByIds(modelName, ids ?? []),
-    ready && ids != null && ids.length > 0,
+    ready && ids != null && ids.length > 0 && !pause,
     `${modelName}:${idsKey}`,
     () => ids != null && ids.some((id) => pool.getById(modelName, id) == null),
   );
@@ -395,9 +411,11 @@ function useRecordsByIndexName<T extends BaseModel>(
   modelName: string,
   indexKey: string,
   value: string | readonly string[] | null | undefined,
+  opts?: UseQueryOptions,
 ): AsyncResource<T[]> {
   const { sm, status } = useSyncEngine();
   const ready = status.phase === BootstrapPhase.Ready;
+  const pause = opts?.pause ?? false;
 
   const values =
     value == null
@@ -428,7 +446,7 @@ function useRecordsByIndexName<T extends BaseModel>(
         values.map((v) => sm.getOrLoadCollection(modelName, indexKey, v)),
       );
     },
-    ready && hasValues,
+    ready && hasValues && !pause,
     `${modelName}:${indexKey}:${valuesKey}`,
     () =>
       hasValues &&
@@ -505,9 +523,11 @@ export function useUndoRedo() {
 
 export function useRelation<T extends BaseModel = BaseModel>(
   relation: LazyCollectionBase<T> | null | undefined,
+  opts?: UseQueryOptions,
 ): AsyncResource<T[]>;
 export function useRelation<T extends BaseModel = BaseModel>(
   relation: BackRef<T> | null | undefined,
+  opts?: UseQueryOptions,
 ): AsyncResource<T | null>;
 export function useRelation(
   relation:
@@ -515,9 +535,11 @@ export function useRelation(
     | BackRef<BaseModel>
     | null
     | undefined,
+  opts?: UseQueryOptions,
 ): AsyncResource<BaseModel[] | BaseModel | null> {
   const [tick, forceRender] = useState(0);
   const isBackRef = relation instanceof BackRef;
+  const pause = opts?.pause ?? false;
 
   // Collections expose watch() for invalidation; BackRef does not.
   useEffect(() => {
@@ -530,10 +552,10 @@ export function useRelation(
   }, [relation, isBackRef]);
 
   useEffect(() => {
-    if (relation != null && !relation.isLoaded && !relation.isLoading) {
+    if (!pause && relation != null && !relation.isLoaded && !relation.isLoading) {
       relation.load().then(() => forceRender((n) => n + 1));
     }
-  }, [relation, tick]);
+  }, [relation, tick, pause]);
 
   if (relation == null) {
     // Can't tell collection from back-ref at null; `[]` is the map-safe
@@ -557,6 +579,9 @@ export function useRelation(
     isLoaded: relation.isLoaded ?? false,
     error: relation.error ?? null,
     reload: async () => {
+      if (pause) {
+        return;
+      }
       await (isBackRef
         ? (relation as BackRef<BaseModel>).load()
         : (relation as LazyCollectionBase<BaseModel>).reload());
@@ -663,10 +688,12 @@ function handleRegistryName(handle: Handle): string {
 export function useRecord<H extends Handle>(
   handle: H,
   id: string | null | undefined,
+  opts?: UseQueryOptions,
 ): AsyncResource<RecordOf<H> | null> {
   return useRecordByName(
     handleRegistryName(handle),
     id,
+    opts,
   ) as unknown as AsyncResource<RecordOf<H> | null>;
 }
 
@@ -674,10 +701,12 @@ export function useRecord<H extends Handle>(
 export function useRecords<H extends Handle>(
   handle: H,
   ids?: string[] | null,
+  opts?: UseQueryOptions,
 ): AsyncResource<RecordOf<H>[]> {
   return useRecordsByName(
     handleRegistryName(handle),
     ids,
+    opts,
   ) as unknown as AsyncResource<RecordOf<H>[]>;
 }
 
@@ -687,10 +716,12 @@ export function useRecordsByIndex<H extends Handle>(
   handle: H,
   indexKey: IndexKeyOf<H>,
   value: string | readonly string[] | null | undefined,
+  opts?: UseQueryOptions,
 ): AsyncResource<RecordOf<H>[]> {
   return useRecordsByIndexName(
     handleRegistryName(handle),
     indexKey as string,
     value,
+    opts,
   ) as unknown as AsyncResource<RecordOf<H>[]>;
 }

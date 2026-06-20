@@ -59,6 +59,7 @@ export type { DatabaseMeta, StorageAdapter } from "./Database.js";
 export { StoreManager, RestrictDeleteError } from "./StoreManager.js";
 export type {
   BootstrapResponse,
+  EvictOptions,
   BootstrapFetcher,
   BootstrapFetcherOptions,
   FetcherContext,
