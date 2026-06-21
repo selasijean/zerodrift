@@ -2023,6 +2023,11 @@ export class StoreManager<TContext = unknown> {
 
     const isEphemeral = meta?.loadStrategy === LoadStrategy.Ephemeral;
     const results = [...inMemory] as T[];
+    // For Ephemeral models the pool is the only copy. If the watermark evicts
+    // some of the just-hydrated records mid-load (a scope larger than the
+    // model's maxResident), the collection can't be cached as "complete" —
+    // there is no IDB to rehydrate the dropped rows from. Gates coverage below.
+    let cacheable = true;
 
     // Single resolved fetcher — either the batched loader or the per-triple
     // callback. Routing both through one local lets TS narrow the null check.
@@ -2074,15 +2079,24 @@ export class StoreManager<TContext = unknown> {
       // Empty result still expresses "we asked for this model" — mark it
       // loaded so the SSE catchup URL includes it and future inserts arrive.
       this.database.markModelLoaded(modelName);
-      // Mark loaded before the IDB read so SSE inserts arriving during
-      // that read are hydrated directly rather than waiting for next access.
-      // The persistent record is set later via markPartialIndexLoaded.
-      this.partialIndexCoverage.set(key, {
-        modelName,
-        indexKey,
-        value,
-        firstSyncId: this.database.currentMeta?.lastSyncId ?? 0,
-      });
+      // An Ephemeral scope larger than maxResident loses rows to the watermark
+      // during the hydrate loop above; with no IDB to back them, the cached
+      // collection would be silently truncated. Only cache when every loaded
+      // record is still resident.
+      cacheable =
+        !isEphemeral ||
+        results.every((r) => this.objectPool.getById(modelName, r.id) != null);
+      if (cacheable) {
+        // Mark loaded before the IDB read so SSE inserts arriving during
+        // that read are hydrated directly rather than waiting for next access.
+        // The persistent record is set later via markPartialIndexLoaded.
+        this.partialIndexCoverage.set(key, {
+          modelName,
+          indexKey,
+          value,
+          firstSyncId: this.database.currentMeta?.lastSyncId ?? 0,
+        });
+      }
     }
 
     if (!isEphemeral) {
@@ -2103,7 +2117,9 @@ export class StoreManager<TContext = unknown> {
       }
     }
 
-    await this.markPartialIndexLoaded(modelName, indexKey, value);
+    if (cacheable) {
+      await this.markPartialIndexLoaded(modelName, indexKey, value);
+    }
     return results;
   }
 

@@ -697,6 +697,40 @@ describe("safe eviction keeps IDB in sync with the pool", () => {
     await sm.getOrLoadCollection("EphemeralColl", "teamId", "team-1");
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
+
+  it("does not cache coverage for an Ephemeral scope larger than maxResident", async () => {
+    const fetcher = vi.fn().mockResolvedValue([
+      { id: "e1", label: "A", teamId: "team-1" },
+      { id: "e2", label: "B", teamId: "team-1" },
+      { id: "e3", label: "C", teamId: "team-1" },
+      { id: "e4", label: "D", teamId: "team-1" },
+    ]);
+    sm = await makeManager({
+      initialGroups: ["team-1"],
+      onDemandFetcher: fetcher,
+      eviction: { maxResident: 3 },
+    });
+
+    // The scope has 4 records but the cap is 3 — the watermark evicts during
+    // hydration, so the pool can never hold the full collection.
+    const loaded = await sm.getOrLoadCollection<EphemeralColl>(
+      "EphemeralColl",
+      "teamId",
+      "team-1",
+    );
+    expect(loaded.length).toBe(4); // the call still returns the full set
+    expect(
+      sm.objectPool.getAll<EphemeralColl>("EphemeralColl").length,
+    ).toBeLessThan(4);
+
+    // Coverage must NOT be cached: the pool can't back the full collection and
+    // there is no IDB to fall back on, so a cached marker would lie.
+    expect(sm.isCollectionLoaded("EphemeralColl", "teamId", "team-1")).toBe(false);
+
+    // The next load re-fetches rather than returning a truncated pool view.
+    await sm.getOrLoadCollection("EphemeralColl", "teamId", "team-1");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
