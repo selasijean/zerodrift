@@ -586,8 +586,8 @@ export class StoreManager<TContext = unknown> {
       });
     });
 
-    this.objectPool.setAfterPutCallback((modelName) => {
-      this.checkWatermark(modelName);
+    this.objectPool.setAfterPutCallback((modelName, justInsertedId) => {
+      this.checkWatermark(modelName, justInsertedId);
     });
   }
 
@@ -2338,7 +2338,7 @@ export class StoreManager<TContext = unknown> {
     return this.config.eviction?.maxResident;
   }
 
-  private checkWatermark(modelName: string): void {
+  private checkWatermark(modelName: string, protectId?: string): void {
     const max = this.resolveMaxResident(modelName);
     if (max == null) {
       return;
@@ -2350,13 +2350,14 @@ export class StoreManager<TContext = unknown> {
     this.runEvictionLoop(modelName, null, {
       keepInDb: true,
       maxToKeep: max,
+      protectId,
     });
   }
 
   private runEvictionLoop(
     modelName: string,
     predicate: ((record: BaseModel) => boolean) | null,
-    opts: { keepInDb: boolean; maxToKeep?: number },
+    opts: { keepInDb: boolean; maxToKeep?: number; protectId?: string },
   ): string[] {
     const all = this.objectPool.getAll(modelName);
     const entries = [...all];
@@ -2371,6 +2372,12 @@ export class StoreManager<TContext = unknown> {
 
     const evictedIds: string[] = [];
     for (const record of entries) {
+      if (opts.protectId != null && record.id === opts.protectId) {
+        // Never evict the record whose own insert triggered this check — a
+        // fresh optimistic create is clean and not yet in-flight, so it would
+        // otherwise be the first record dropped to satisfy the cap.
+        continue;
+      }
       if (predicate != null && !predicate(record)) {
         continue;
       }

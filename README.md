@@ -145,6 +145,7 @@ Pass `{ safe: true }` to skip records that are observed, dirty, or in-flight. Pa
 - has an **in-flight transaction** (sent to server, awaiting confirmation)
 - is **observed by a mounted React hook** (`useRecord`, `useRecords`, `useRecordsByIndex`)
 - belongs to a model with `LoadStrategy.LocalOnly` or `eviction: false`
+- **just triggered the check** — inserting a record never evicts that same record, so a fresh optimistic create can't be dropped before its transaction lands
 
 **Self-heal (watermark only).** Watermark eviction is involuntary, so it's reversible: evicted records are marked, and if a `@Reference` getter or a mounted React hook still needs one, the engine reloads it from IDB in the background and it reappears on the next render. Explicit `evictByIndex` / `evictWhere` are deliberate removals — they do **not** self-heal, which is what makes sync-group cleanup actually clear the data instead of reloading it.
 

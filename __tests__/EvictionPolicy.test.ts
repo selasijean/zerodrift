@@ -680,6 +680,34 @@ describe("watermark eviction (maxResident)", () => {
     expect(sm.objectPool.getById("WatermarkItem", "w8")).toBeDefined();
   });
 
+  it("never evicts the brand-new create that triggered the check", async () => {
+    sm = await makeManager();
+    const meta = ModelRegistry.getModelMeta("WatermarkItem")!;
+
+    // Fill to the cap and pin every resident, so the watermark can't touch them.
+    for (let i = 1; i <= 5; i++) {
+      sm.objectPool.hydrateAndPut("WatermarkItem", meta, {
+        id: `w${i}`,
+        label: `Item ${i}`,
+      });
+      sm.objectPool.observeInstance("WatermarkItem", `w${i}`);
+    }
+
+    // A clean optimistic create: hydrate populates no pendingChanges (not dirty)
+    // and commitCreate enqueues the in-flight transaction only AFTER put. With
+    // every resident pinned, the fresh record is the sole evictable one — the
+    // watermark must skip the very record whose insert triggered it.
+    const fresh = new WatermarkItem();
+    fresh.hydrate({ id: "w6", label: "Fresh" });
+    sm.commitCreate(fresh);
+
+    expect(sm.objectPool.getById("WatermarkItem", "w6")).toBeDefined();
+
+    for (let i = 1; i <= 5; i++) {
+      sm.objectPool.unobserveInstance("WatermarkItem", `w${i}`);
+    }
+  });
+
   it("skips observed records during watermark eviction", async () => {
     sm = await makeManager();
     const meta = ModelRegistry.getModelMeta("WatermarkItem")!;

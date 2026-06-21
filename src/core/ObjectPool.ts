@@ -120,13 +120,17 @@ export class ObjectPool {
   private recentlyEvicted = new Set<string>();
 
   private rehydrator: ((modelName: string, id: string) => void) | null = null;
-  private afterPutCallback: ((modelName: string) => void) | null = null;
+  private afterPutCallback:
+    | ((modelName: string, justInsertedId: string) => void)
+    | null = null;
 
   setRehydrator(fn: (modelName: string, id: string) => void): void {
     this.rehydrator = fn;
   }
 
-  setAfterPutCallback(fn: (modelName: string) => void): void {
+  setAfterPutCallback(
+    fn: (modelName: string, justInsertedId: string) => void,
+  ): void {
     this.afterPutCallback = fn;
   }
 
@@ -296,8 +300,11 @@ export class ObjectPool {
     // Watermark check runs on every genuinely new insert — covers both the
     // hydrate path (hydrateAndPut → put) and direct creates (commitCreate →
     // put). Re-puts for an in-place hydrate don't grow the pool, so skip them.
+    // The just-inserted id is forwarded so the watermark never evicts the very
+    // record that triggered it (a brand-new optimistic create is clean and not
+    // yet in-flight, so it would otherwise be the first thing dropped).
     if (wasNew && this.afterPutCallback != null) {
-      this.afterPutCallback(modelName);
+      this.afterPutCallback(modelName, instance.id);
     }
   }
 
