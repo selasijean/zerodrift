@@ -641,6 +641,62 @@ describe("safe eviction keeps IDB in sync with the pool", () => {
     await sm.getOrLoadCollection("EphemeralColl", "teamId", "team-1");
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
+
+  it("evictByIndex { keepInDb } on Ephemeral clears coverage (no IDB to keep)", async () => {
+    const fetcher = vi.fn().mockResolvedValue([
+      { id: "e1", label: "A", teamId: "team-1" },
+      { id: "e2", label: "B", teamId: "team-1" },
+    ]);
+    sm = await makeManager({ initialGroups: ["team-1"], onDemandFetcher: fetcher });
+
+    await sm.getOrLoadCollection("EphemeralColl", "teamId", "team-1");
+    expect(sm.isCollectionLoaded("EphemeralColl", "teamId", "team-1")).toBe(true);
+
+    // keepInDb is meaningless for Ephemeral — there is no IDB to keep, so the
+    // records are gone for good and coverage must not keep claiming completeness.
+    await sm.evictByIndex("EphemeralColl", "teamId", "team-1", { keepInDb: true });
+
+    expect(sm.objectPool.getAll<EphemeralColl>("EphemeralColl").length).toBe(0);
+    expect(sm.isCollectionLoaded("EphemeralColl", "teamId", "team-1")).toBe(false);
+    await sm.getOrLoadCollection("EphemeralColl", "teamId", "team-1");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("watermark eviction of Ephemeral records clears stale coverage", async () => {
+    const fetcher = vi.fn().mockResolvedValue([
+      { id: "e1", label: "A", teamId: "team-1" },
+      { id: "e2", label: "B", teamId: "team-1" },
+    ]);
+    sm = await makeManager({
+      initialGroups: ["team-1"],
+      onDemandFetcher: fetcher,
+      eviction: { maxResident: 3 },
+    });
+    const meta = ModelRegistry.getModelMeta("EphemeralColl")!;
+
+    // Load 2 within the cap → coverage set, both resident.
+    await sm.getOrLoadCollection("EphemeralColl", "teamId", "team-1");
+    expect(sm.isCollectionLoaded("EphemeralColl", "teamId", "team-1")).toBe(true);
+    expect(sm.objectPool.getAll<EphemeralColl>("EphemeralColl").length).toBe(2);
+
+    // Push the same model past maxResident with unrelated inserts. The watermark
+    // evicts the oldest (the team-1 records) FIFO — pool-only, no IDB backing.
+    for (let i = 1; i <= 3; i++) {
+      sm.objectPool.hydrateAndPut("EphemeralColl", meta, {
+        id: `x${i}`,
+        label: `X${i}`,
+        teamId: "team-2",
+      });
+    }
+
+    // The team-1 coverage must be cleared, since its records were evicted with
+    // nothing to reload them from.
+    expect(sm.objectPool.getById("EphemeralColl", "e1")).toBeUndefined();
+    expect(sm.isCollectionLoaded("EphemeralColl", "teamId", "team-1")).toBe(false);
+
+    await sm.getOrLoadCollection("EphemeralColl", "teamId", "team-1");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

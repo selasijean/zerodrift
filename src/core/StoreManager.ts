@@ -2386,7 +2386,7 @@ export class StoreManager<TContext = unknown> {
       }
     }
 
-    const evictedIds: string[] = [];
+    const evicted: BaseModel[] = [];
     for (const record of entries) {
       if (opts.protectId != null && record.id === opts.protectId) {
         // Never evict the record whose own insert triggered this check — a
@@ -2401,16 +2401,17 @@ export class StoreManager<TContext = unknown> {
       if (!result.safe) {
         continue;
       }
-      evictedIds.push(record.id);
-      if (targetCount != null && evictedIds.length >= targetCount) {
+      evicted.push(record);
+      if (targetCount != null && evicted.length >= targetCount) {
         break;
       }
     }
 
-    if (evictedIds.length === 0) {
+    if (evicted.length === 0) {
       return [];
     }
 
+    const evictedIds = evicted.map((r) => r.id);
     this.objectPool.evictBatch(modelName, evictedIds);
     for (const id of evictedIds) {
       this.loadedIds.delete(StoreManager.modelIdKey(modelName, id));
@@ -2420,15 +2421,71 @@ export class StoreManager<TContext = unknown> {
       void this.database.deleteModels(modelName, evictedIds).catch(() => {});
     }
 
+    this.invalidateEphemeralCoverage(modelName, evicted);
+
     return evictedIds;
+  }
+
+  /**
+   * Ephemeral models live only in the pool — no IDB backing — so evicting their
+   * records destroys the only copy. Any `partialIndexCoverage` scope an evicted
+   * record belonged to is now incomplete and must be dropped; otherwise a later
+   * `getOrLoadCollection` trusts the marker, skips both the server fetch and the
+   * (non-existent) IDB read, and returns a truncated collection. No-op for
+   * non-ephemeral models, whose IDB rows survive `keepInDb` eviction.
+   */
+  private invalidateEphemeralCoverage(
+    modelName: string,
+    evicted: BaseModel[],
+  ): void {
+    if (evicted.length === 0) {
+      return;
+    }
+    const meta = ModelRegistry.getModelMeta(modelName);
+    if (meta?.loadStrategy !== LoadStrategy.Ephemeral) {
+      return;
+    }
+    let clearedAllScope = false;
+    for (const [key, entry] of [...this.partialIndexCoverage]) {
+      if (entry.modelName !== modelName) {
+        continue;
+      }
+      const affected =
+        entry.indexKey === ALL_INDEX_KEY_SENTINEL ||
+        evicted.some((r) => prop(r, entry.indexKey) === entry.value);
+      if (!affected) {
+        continue;
+      }
+      this.partialIndexCoverage.delete(key);
+      if (entry.indexKey === ALL_INDEX_KEY_SENTINEL) {
+        clearedAllScope = true;
+      }
+    }
+    if (clearedAllScope) {
+      // Keep the `*`-coverage mirror consistent: flip it off only when no
+      // other `*` scope for this model survives.
+      let stillCovered = false;
+      for (const entry of this.partialIndexCoverage.values()) {
+        if (
+          entry.modelName === modelName &&
+          entry.indexKey === ALL_INDEX_KEY_SENTINEL
+        ) {
+          stillCovered = true;
+          break;
+        }
+      }
+      if (!stillCovered) {
+        this.fullyLoadedModels.delete(modelName);
+      }
+    }
   }
 
   private evictFromPool(
     modelName: string,
     predicate: (m: Record<string, unknown>) => boolean,
     safe = false,
-  ): number {
-    let count = 0;
+  ): BaseModel[] {
+    const evicted: BaseModel[] = [];
     for (const m of this.objectPool.getAll(modelName)) {
       if (!predicate(m as unknown as Record<string, unknown>)) {
         continue;
@@ -2438,9 +2495,10 @@ export class StoreManager<TContext = unknown> {
       }
       this.objectPool.remove(modelName, m.id);
       this.loadedIds.delete(StoreManager.modelIdKey(modelName, m.id));
-      count++;
+      evicted.push(m);
     }
-    return count;
+    this.invalidateEphemeralCoverage(modelName, evicted);
+    return evicted;
   }
 
   /**
@@ -2456,7 +2514,7 @@ export class StoreManager<TContext = unknown> {
     predicate: (m: Record<string, unknown>) => boolean,
     opts: EvictOptions = {},
   ): Promise<number> {
-    const poolCount = this.evictFromPool(modelName, predicate, opts.safe);
+    const poolCount = this.evictFromPool(modelName, predicate, opts.safe).length;
     if (opts.keepInDb === true) {
       return poolCount;
     }
@@ -2496,10 +2554,12 @@ export class StoreManager<TContext = unknown> {
       modelName,
       (m) => m[indexKey] === value,
       opts.safe,
-    );
+    ).length;
     if (opts.keepInDb === true) {
       // Pool-only release: IDB rows and the collection-coverage entry stay,
       // so a future getOrLoadCollection rehydrates from IDB without refetch.
+      // (evictFromPool already dropped coverage for any Ephemeral records,
+      // which have no IDB to rehydrate from.)
       return;
     }
     if (opts.safe === true) {
