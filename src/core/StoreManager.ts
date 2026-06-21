@@ -106,6 +106,12 @@ export interface EvictOptions {
    * load refetches from the server.
    */
   keepInDb?: boolean;
+  /**
+   * Check `canEvict` for each record before evicting. When true, records with
+   * unsaved changes, in-flight transactions, or active observation refcounts
+   * are skipped. Default false — explicit evict calls are unconditional.
+   */
+  safe?: boolean;
 }
 
 export type EvictBlockReason =
@@ -349,7 +355,6 @@ export interface AdvancedConfig<TContext = unknown> {
 }
 
 export interface EvictionConfig {
-  onSyncGroupLeave?: boolean;
   keepInDb?: boolean;
   keepInDbOnServerRemoval?: boolean;
   maxResident?: number;
@@ -1570,61 +1575,27 @@ export class StoreManager<TContext = unknown> {
   private async handleSyncGroupsRemoved(
     removedGroups: string[],
   ): Promise<void> {
-    await this.fireOnSyncGroupDelete(removedGroups, true);
+    await this.fireOnSyncGroupDelete(removedGroups);
   }
 
   /**
-   * Fire auto-evict for sync-group-leave (if configured), then the adopter's
-   * `onSyncGroupDelete` callback. Errors are caught per group so one bad
-   * group doesn't abort cleanup for the rest.
+   * Fire the adopter's `onSyncGroupDelete` callback. Errors are caught per
+   * group so one bad group doesn't abort cleanup for the rest.
    */
   private async fireOnSyncGroupDelete(
     groupIds: string[] | Iterable<string>,
-    serverPushed = false,
   ): Promise<void> {
-    const evictionCfg = this.config.eviction;
-    const autoEvict =
-      evictionCfg?.onSyncGroupLeave === true ||
-      this.syncGroupKeyModels().length > 0;
-
+    const cb = this.config.onSyncGroupDelete;
+    if (cb == null) {
+      return;
+    }
     for (const g of groupIds) {
-      if (autoEvict) {
-        const keepInDb = serverPushed
-          ? (evictionCfg?.keepInDbOnServerRemoval ?? false)
-          : (evictionCfg?.keepInDb ?? true);
-        for (const meta of this.syncGroupKeyModels()) {
-          const sgk = (meta.eviction as { syncGroupKey: string }).syncGroupKey;
-          this.runEvictionLoop(
-            meta.name,
-            (record) => prop(record, sgk) === g,
-            { keepInDb },
-          );
-        }
-      }
-
-      const cb = this.config.onSyncGroupDelete;
-      if (cb != null) {
-        try {
-          await cb(g, this);
-        } catch (err) {
-          this.emitError(err, { kind: "onSyncGroupDelete", groupId: g });
-        }
+      try {
+        await cb(g, this);
+      } catch (err) {
+        this.emitError(err, { kind: "onSyncGroupDelete", groupId: g });
       }
     }
-  }
-
-  private syncGroupKeyModelsCache: ModelMeta[] | null = null;
-
-  private syncGroupKeyModels(): ModelMeta[] {
-    if (this.syncGroupKeyModelsCache != null) {
-      return this.syncGroupKeyModelsCache;
-    }
-    this.syncGroupKeyModelsCache = ModelRegistry.allModels().filter(
-      (meta) =>
-        typeof meta.eviction === "object" &&
-        meta.eviction.syncGroupKey != null,
-    );
-    return this.syncGroupKeyModelsCache;
   }
 
   /**
@@ -2431,18 +2402,22 @@ export class StoreManager<TContext = unknown> {
     return evictedIds;
   }
 
-  /** Walk the pool for `modelName`, removing instances matching `predicate`. */
   private evictFromPool(
     modelName: string,
     predicate: (m: Record<string, unknown>) => boolean,
+    safe = false,
   ): number {
     let count = 0;
     for (const m of this.objectPool.getAll(modelName)) {
-      if (predicate(m as unknown as Record<string, unknown>)) {
-        this.objectPool.remove(modelName, m.id);
-        this.loadedIds.delete(StoreManager.modelIdKey(modelName, m.id));
-        count++;
+      if (!predicate(m as unknown as Record<string, unknown>)) {
+        continue;
       }
+      if (safe && !this.canEvict(modelName, m.id).safe) {
+        continue;
+      }
+      this.objectPool.remove(modelName, m.id);
+      this.loadedIds.delete(StoreManager.modelIdKey(modelName, m.id));
+      count++;
     }
     return count;
   }
@@ -2460,7 +2435,7 @@ export class StoreManager<TContext = unknown> {
     predicate: (m: Record<string, unknown>) => boolean,
     opts: EvictOptions = {},
   ): Promise<number> {
-    const poolCount = this.evictFromPool(modelName, predicate);
+    const poolCount = this.evictFromPool(modelName, predicate, opts.safe);
     if (opts.keepInDb === true) {
       return poolCount;
     }
@@ -2487,7 +2462,7 @@ export class StoreManager<TContext = unknown> {
     value: string,
     opts: EvictOptions = {},
   ): Promise<void> {
-    this.evictFromPool(modelName, (m) => m[indexKey] === value);
+    this.evictFromPool(modelName, (m) => m[indexKey] === value, opts.safe);
     if (opts.keepInDb === true) {
       // Pool-only release: IDB rows and the collection-coverage entry stay,
       // so a future getOrLoadCollection rehydrates from IDB without refetch.

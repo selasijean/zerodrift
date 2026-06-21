@@ -91,11 +91,10 @@ After this, the client has a complete local copy of the new group's data, and fu
 ### When groups are removed
 
 1. Remove from `meta.subscribedSyncGroups`
-2. `fireOnSyncGroupDelete` runs auto-eviction for models with a `syncGroupKey` matching the removed group. The eviction loop respects the safety predicate — records with unsaved changes, in-flight transactions, or active observation refcounts (rendered by React hooks) are skipped.
-3. The adopter's `onSyncGroupDelete` callback (if configured) fires after auto-eviction, receiving the group ID and StoreManager.
-4. Components displaying evicted data will see their models disappear. The React hook self-heal path detects eviction (vs server-side deletion) and calls `reload()` to restore records from IDB if `keepInDb` was true.
+2. The `onSyncGroupDelete` callback fires with the group ID and `StoreManager`. Use `sm.evictByIndex` or `sm.evictWhere` to drop records belonging to that group. Pass `{ safe: true }` to respect the safety predicate (skips observed, dirty, in-flight records).
+3. Components displaying evicted data will see their models disappear. The React hook self-heal path detects eviction (vs server-side deletion) and calls `reload()` to restore records from IDB if `keepInDb` was true.
 
-**`keepInDb` defaults depend on the source.** User-initiated `deactivateSyncGroup` defaults to `keepInDb: true` (IDB rows stay for fast rehydration if the user re-subscribes). Server-pushed `removedSyncGroups` defaults to `keepInDb: false` (the user lost access, so the data should be purged). Both defaults can be overridden via `EvictionConfig.keepInDb` and `EvictionConfig.keepInDbOnServerRemoval`.
+Pass `{ keepInDb: true }` to `evictByIndex` to keep IDB rows for fast rehydration if the user re-subscribes. Omit it to purge both pool and IDB (appropriate for server-pushed removals where the user lost access).
 
 This is the client-side equivalent of a permission revocation. If a user is removed from a team, the server pushes a `removedSyncGroups: ["team-eng"]` packet and the client cleanly purges that team's data.
 

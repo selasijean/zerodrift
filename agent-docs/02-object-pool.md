@@ -76,7 +76,7 @@ The pool notifies at the model-type level, not per-instance. Every component sub
 ### Memory is unbounded by default
 For models with `LoadStrategy.Eager`, **every instance is loaded into the pool at bootstrap** and stays there unless explicitly opted into eviction. If you have 50,000 issues across 100 teams, and a user is only ever on one team, all 50,000 still live in the pool.
 
-This is mitigated by `LoadStrategy.Lazy` and `LoadStrategy.Partial`, and by the declarative eviction policy — models can declare `eviction: { syncGroupKey, maxResident }` to auto-evict on sync-group leave or when the pool exceeds a resident-count watermark. See the eviction section below.
+This is mitigated by `LoadStrategy.Lazy` and `LoadStrategy.Partial`, and by the eviction system — models can declare `eviction: { maxResident }` to cap pool size, and the `onSyncGroupDelete` callback lets you evict by index when a sync group is deactivated. See the eviction section below.
 
 ### Eviction
 

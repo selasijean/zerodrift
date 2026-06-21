@@ -90,13 +90,17 @@ See [agent-docs/01-models-and-decorators.md](agent-docs/01-models-and-decorators
 
 ## Eviction
 
-By default, records stay in memory for the session. The declarative eviction policy lets you bound the pool without manual cache management.
+By default, records stay in memory for the session. Eviction lets you bound the pool and clean up stale data.
+
+### Watermark (automatic)
+
+Cap a model's pool size with FIFO eviction:
 
 ```ts
 @ClientModel({
   name: "Comment",
   loadStrategy: LoadStrategy.Partial,
-  eviction: { syncGroupKey: "teamId", maxResident: 500 },
+  eviction: { maxResident: 500 },
 })
 export class Comment extends BaseModel {
   @Property({ indexed: true }) public teamId = "";
@@ -104,15 +108,9 @@ export class Comment extends BaseModel {
 }
 ```
 
-When the server pushes `removedSyncGroups: ["team-eng"]` (or the client calls `deactivateSyncGroup("team-eng")`), the engine walks every Comment and evicts records where `comment.teamId === "team-eng"`. The `syncGroupKey` names the property whose value is compared against the deactivated group ID.
+When the pool exceeds `maxResident` after a new insert, the oldest records are evicted down to `lowWaterRatio` (default 0.75). Evicted records stay in IDB for fast reload. Set `eviction: false` to exempt a model entirely.
 
-| Option | Effect |
-|---|---|
-| `syncGroupKey` | The property on this model that ties it to a sync group. When a group is deactivated, records whose `[syncGroupKey]` value equals the group ID are evicted. |
-| `maxResident` | FIFO watermark. When the pool exceeds this count after a new insert, oldest records are evicted down to `lowWaterRatio` (default 0.75). Evicted records stay in IDB for fast reload. |
-| `false` | Exempt a model from eviction entirely, even if a global `maxResident` is configured. |
-
-Global defaults can be set in `StoreManagerConfig.eviction`:
+Global defaults in `StoreManagerConfig.eviction`:
 
 ```ts
 new StoreManager({
@@ -120,13 +118,29 @@ new StoreManager({
   eviction: {
     maxResident: 1000,        // global cap (per-model overrides win)
     lowWaterRatio: 0.75,      // evict down to 75% of maxResident
-    keepInDb: true,           // user-initiated deactivation keeps IDB rows
-    keepInDbOnServerRemoval: false, // server-pushed removal purges IDB
   },
 });
 ```
 
-**Safety guarantees.** The eviction loop never evicts a record that:
+### Sync-group cleanup (explicit)
+
+When a sync group is deactivated, the `onSyncGroupDelete` callback fires. Use `evictByIndex` to drop the group's records:
+
+```ts
+new StoreManager({
+  // ...
+  hooks: {
+    onSyncGroupDelete: async (groupId, sm) => {
+      await sm.evictByIndex("Comment", "teamId", groupId, { keepInDb: true });
+      await sm.evictByIndex("Issue", "teamId", groupId, { keepInDb: true });
+    },
+  },
+});
+```
+
+Pass `{ safe: true }` to skip records that are observed, dirty, or in-flight. Pass `{ keepInDb: true }` to keep IDB rows for fast rehydration on re-subscribe.
+
+**Safety guarantees.** The watermark eviction loop never evicts a record that:
 - has **unsaved changes** (dirty fields not yet committed)
 - has an **in-flight transaction** (sent to server, awaiting confirmation)
 - is **observed by a mounted React hook** (`useRecord`, `useRecords`, `useRecordsByIndex`)
@@ -170,7 +184,7 @@ export const schema = defineSchema({
     issue: entityFromZod(IssueRecord, {
       name: "Issue",
       loadStrategy: LoadStrategy.Eager,
-      eviction: { syncGroupKey: "teamId", maxResident: 5000 },
+      eviction: { maxResident: 5000 },
       fields: {
         teamId: s.refId("team").nullable().indexed(),
       },

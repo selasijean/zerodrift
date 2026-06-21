@@ -159,10 +159,10 @@ The heap grows proportionally to what's been viewed, not the total workspace siz
 
 ### Eviction keeps the heap bounded
 
-By default, once a record is loaded into the pool it stays there for the session. For long-lived sessions on large workspaces, this can accumulate. The declarative eviction policy addresses this with two triggers:
+By default, once a record is loaded into the pool it stays there for the session. For long-lived sessions on large workspaces, this can accumulate. The eviction system addresses this:
 
-- **Sync-group-leave.** Models that declare `eviction: { syncGroupKey: "teamId" }` are automatically evicted when `deactivateSyncGroup` fires or the server pushes `removedSyncGroups`. User-initiated deactivation defaults to `keepInDb: true` (IDB rows stay for fast rehydration); server-pushed removal defaults to `keepInDb: false`.
-- **Watermark.** Models that declare `eviction: { maxResident: N }` (or a global `eviction.maxResident` in `StoreManagerConfig`) are evicted FIFO down to `lowWaterRatio` (default 0.75) whenever the pool count exceeds the cap. Watermark always uses `keepInDb: true`.
+- **Watermark (automatic).** Models that declare `eviction: { maxResident: N }` (or a global `eviction.maxResident` in `StoreManagerConfig`) are evicted FIFO down to `lowWaterRatio` (default 0.75) whenever the pool count exceeds the cap. Watermark always uses `keepInDb: true`.
+- **Sync-group-leave (explicit).** The `onSyncGroupDelete` callback fires when `deactivateSyncGroup` or a server-pushed `removedSyncGroups` removes a group. Use `sm.evictByIndex(modelName, indexKey, groupId)` to drop the group's records. Pass `{ safe: true }` to respect the safety predicate.
 
 The safety predicate (`canEvict`) refuses to evict records with unsaved changes, in-flight transactions, or active observation refcounts (records being rendered by React hooks). Records evicted from the pool are marked so the self-heal path can reload them from IDB when a `@Reference` getter or React hook accesses them. See `02-object-pool.md` for the self-heal mechanism.
 

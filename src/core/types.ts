@@ -135,7 +135,6 @@ export interface PropertyMeta {
 
 /** Per-model eviction configuration. `false` explicitly disables eviction. */
 export type ModelEvictionConfig = false | {
-  syncGroupKey?: string;
   maxResident?: number;
 };
 

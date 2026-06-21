@@ -40,7 +40,6 @@ class RefHolder extends BaseModel {
 @ClientModel({
   name: "ObsIssue",
   loadStrategy: LoadStrategy.Partial,
-  eviction: { syncGroupKey: "teamId" },
 })
 class ObsIssue extends BaseModel {
   @Property()
@@ -55,6 +54,7 @@ class ObsIssue extends BaseModel {
 async function makeTestSm(opts: {
   eviction?: EvictionConfig;
   initialGroups?: string[];
+  onSyncGroupDelete?: (groupId: string, sm: StoreManager) => void | Promise<void>;
 } = {}): Promise<StoreManager> {
   const adapter = new MemoryAdapter();
   const sm = new StoreManager({
@@ -67,6 +67,7 @@ async function makeTestSm(opts: {
       }),
     },
     persistence: { storageAdapter: adapter },
+    hooks: { onSyncGroupDelete: opts.onSyncGroupDelete },
     eviction: opts.eviction,
   });
   await sm.bootstrap();
@@ -282,8 +283,15 @@ describe("@Reference self-heal on eviction", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("observation protects records during sync-group eviction", () => {
+  const evictObsIssueByTeam = async (groupId: string, storeManager: StoreManager) => {
+    await storeManager.evictByIndex("ObsIssue", "teamId", groupId, { keepInDb: true, safe: true });
+  };
+
   it("observed records survive while unobserved siblings are evicted", async () => {
-    sm = await makeTestSm({ initialGroups: ["team-1"] });
+    sm = await makeTestSm({
+      initialGroups: ["team-1"],
+      onSyncGroupDelete: evictObsIssueByTeam,
+    });
     const meta = ModelRegistry.getModelMeta("ObsIssue")!;
 
     for (let i = 1; i <= 5; i++) {
@@ -311,7 +319,10 @@ describe("observation protects records during sync-group eviction", () => {
   });
 
   it("cross-team navigation: observed team-B survives team-A eviction", async () => {
-    sm = await makeTestSm({ initialGroups: ["team-A", "team-B"] });
+    sm = await makeTestSm({
+      initialGroups: ["team-A", "team-B"],
+      onSyncGroupDelete: evictObsIssueByTeam,
+    });
     const meta = ModelRegistry.getModelMeta("ObsIssue")!;
 
     for (let i = 1; i <= 3; i++) {
@@ -347,7 +358,7 @@ describe("observation protects records during sync-group eviction", () => {
     sm.objectPool.unobserveInstance("ObsIssue", "b3");
   });
 
-  it("observed record in evicted team becomes evictable after unobserve", async () => {
+  it("observed record becomes evictable after unobserve", async () => {
     sm = await makeTestSm({ initialGroups: ["team-1"] });
     const meta = ModelRegistry.getModelMeta("ObsIssue")!;
 
@@ -358,9 +369,7 @@ describe("observation protects records during sync-group eviction", () => {
     });
 
     sm.objectPool.observeInstance("ObsIssue", "i1");
-
-    await sm.deactivateSyncGroup("team-1");
-    expect(sm.objectPool.getById("ObsIssue", "i1")).toBeDefined();
+    expect(sm.canEvict("ObsIssue", "i1")).toEqual({ safe: false, reason: "observed" });
 
     sm.objectPool.unobserveInstance("ObsIssue", "i1");
     expect(sm.canEvict("ObsIssue", "i1")).toEqual({ safe: true });

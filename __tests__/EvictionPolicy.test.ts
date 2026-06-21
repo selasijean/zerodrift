@@ -1,9 +1,9 @@
 /**
- * Tests for the declarative eviction policy (Phases 1–3).
+ * Tests for the eviction policy (Phases 1–3).
  *
  * Phase 1: Safety predicate (canEvict), observation tracking, eviction
  *          markers, batch eviction, self-heal.
- * Phase 2: Sync-group-leave auto-evict via syncGroupKey.
+ * Phase 2: Sync-group-leave via onSyncGroupDelete callback.
  * Phase 3: Resident-count watermark via maxResident.
  */
 
@@ -22,7 +22,6 @@ import { ClientModel, Property } from "@zerodrift/decorators";
 import { LoadStrategy } from "@zerodrift/types";
 import { ModelRegistry } from "@zerodrift/ModelRegistry";
 import { addToPool } from "./fixtures";
-import { controllableSSEClient } from "./helpers/sseClient";
 
 // ── Test-only model fixtures ────────────────────────────────────────────────
 //
@@ -32,7 +31,6 @@ import { controllableSSEClient } from "./helpers/sseClient";
 @ClientModel({
   name: "EvictableIssue",
   loadStrategy: LoadStrategy.Partial,
-  eviction: { syncGroupKey: "teamId" },
 })
 class EvictableIssue extends BaseModel {
   @Property()
@@ -45,7 +43,6 @@ class EvictableIssue extends BaseModel {
 @ClientModel({
   name: "EvictableComment",
   loadStrategy: LoadStrategy.Partial,
-  eviction: { syncGroupKey: "teamId" },
 })
 class EvictableComment extends BaseModel {
   @Property()
@@ -79,7 +76,6 @@ class NoEvictModel extends BaseModel {
 
 async function makeManager(opts: {
   eviction?: {
-    onSyncGroupLeave?: boolean;
     keepInDb?: boolean;
     keepInDbOnServerRemoval?: boolean;
     maxResident?: number;
@@ -345,13 +341,28 @@ describe("evictBatch", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Phase 2: Sync-group-leave auto-evict
+// Phase 2: Sync-group-leave via onSyncGroupDelete callback
 // ═══════════════════════════════════════════════════════════════════════════
 
-describe("sync-group-leave auto-evict", () => {
-  it("evicts records with matching syncGroupKey on user-initiated deactivation", async () => {
+describe("sync-group-leave via onSyncGroupDelete", () => {
+  it("onSyncGroupDelete callback fires on user-initiated deactivation", async () => {
+    const onSyncGroupDelete = vi.fn();
     sm = await makeManager({
       initialGroups: ["team-1"],
+      onSyncGroupDelete,
+    });
+
+    await sm.deactivateSyncGroup("team-1");
+
+    expect(onSyncGroupDelete).toHaveBeenCalledWith("team-1", sm);
+  });
+
+  it("evictByIndex from callback evicts matching records", async () => {
+    sm = await makeManager({
+      initialGroups: ["team-1"],
+      onSyncGroupDelete: async (groupId, storeManager) => {
+        await storeManager.evictByIndex("EvictableIssue", "teamId", groupId, { keepInDb: true });
+      },
     });
     seedPool(sm, "EvictableIssue", EvictableIssue, [
       { id: "i1", title: "A", teamId: "team-1" },
@@ -366,9 +377,12 @@ describe("sync-group-leave auto-evict", () => {
     expect(sm.objectPool.getById("EvictableIssue", "i3")).toBeDefined();
   });
 
-  it("user-initiated deactivation defaults keepInDb: true", async () => {
+  it("evictByIndex with keepInDb: true preserves IDB rows", async () => {
     sm = await makeManager({
       initialGroups: ["team-1"],
+      onSyncGroupDelete: async (groupId, storeManager) => {
+        await storeManager.evictByIndex("EvictableIssue", "teamId", groupId, { keepInDb: true });
+      },
     });
     await seedPoolAndDb(sm, "EvictableIssue", EvictableIssue, [
       { id: "i1", title: "A", teamId: "team-1" },
@@ -382,26 +396,12 @@ describe("sync-group-leave auto-evict", () => {
     ).not.toBeNull();
   });
 
-  it("server-pushed removal defaults keepInDb: false", async () => {
-    const _sseClient = controllableSSEClient();
+  it("evictByIndex without keepInDb removes from IDB", async () => {
     sm = await makeManager({
       initialGroups: ["team-1"],
-      syncUrl: "http://test/events",
-      bootstrap: true,
-    });
-    await seedPoolAndDb(sm, "EvictableIssue", EvictableIssue, [
-      { id: "i1", title: "A", teamId: "team-1" },
-    ]);
-
-    // Simulate server pushing removedSyncGroups via the SSE factory
-    // Since we can't easily wire a controllable SSE into this helper,
-    // we test the keepInDb override config instead.
-  });
-
-  it("respects keepInDb config override for user-initiated removal", async () => {
-    sm = await makeManager({
-      initialGroups: ["team-1"],
-      eviction: { keepInDb: false },
+      onSyncGroupDelete: async (groupId, storeManager) => {
+        await storeManager.evictByIndex("EvictableIssue", "teamId", groupId);
+      },
     });
     await seedPoolAndDb(sm, "EvictableIssue", EvictableIssue, [
       { id: "i1", title: "A", teamId: "team-1" },
@@ -410,50 +410,18 @@ describe("sync-group-leave auto-evict", () => {
     await sm.deactivateSyncGroup("team-1");
 
     expect(sm.objectPool.getById("EvictableIssue", "i1")).toBeUndefined();
-    // With keepInDb: false, IDB should be cleaned up asynchronously
     await vi.waitFor(async () => {
       expect(await sm.database.readModel("EvictableIssue", "i1")).toBeNull();
     });
   });
 
-  it("skips observed records during auto-evict", async () => {
+  it("evicts across multiple models from callback", async () => {
     sm = await makeManager({
       initialGroups: ["team-1"],
-    });
-    seedPool(sm, "EvictableIssue", EvictableIssue, [
-      { id: "i1", title: "Observed", teamId: "team-1" },
-      { id: "i2", title: "Free", teamId: "team-1" },
-    ]);
-    sm.objectPool.observeInstance("EvictableIssue", "i1");
-
-    await sm.deactivateSyncGroup("team-1");
-
-    expect(sm.objectPool.getById("EvictableIssue", "i1")).toBeDefined();
-    expect(sm.objectPool.getById("EvictableIssue", "i2")).toBeUndefined();
-
-    sm.objectPool.unobserveInstance("EvictableIssue", "i1");
-  });
-
-  it("skips dirty records during auto-evict", async () => {
-    sm = await makeManager({
-      initialGroups: ["team-1"],
-    });
-    seedPool(sm, "EvictableIssue", EvictableIssue, [
-      { id: "i1", title: "Original", teamId: "team-1" },
-      { id: "i2", title: "Free", teamId: "team-1" },
-    ]);
-    const inst = sm.objectPool.getById<EvictableIssue>("EvictableIssue", "i1")!;
-    inst.title = "Changed";
-
-    await sm.deactivateSyncGroup("team-1");
-
-    expect(sm.objectPool.getById("EvictableIssue", "i1")).toBeDefined();
-    expect(sm.objectPool.getById("EvictableIssue", "i2")).toBeUndefined();
-  });
-
-  it("evicts across multiple models with syncGroupKey", async () => {
-    sm = await makeManager({
-      initialGroups: ["team-1"],
+      onSyncGroupDelete: async (groupId, storeManager) => {
+        await storeManager.evictByIndex("EvictableIssue", "teamId", groupId, { keepInDb: true });
+        await storeManager.evictByIndex("EvictableComment", "teamId", groupId, { keepInDb: true });
+      },
     });
     seedPool(sm, "EvictableIssue", EvictableIssue, [
       { id: "i1", title: "Issue", teamId: "team-1" },
@@ -468,11 +436,9 @@ describe("sync-group-leave auto-evict", () => {
     expect(sm.objectPool.getById("EvictableComment", "c1")).toBeUndefined();
   });
 
-  it("still fires onSyncGroupDelete callback after auto-evict", async () => {
-    const onSyncGroupDelete = vi.fn();
+  it("does not evict when no callback is configured", async () => {
     sm = await makeManager({
       initialGroups: ["team-1"],
-      onSyncGroupDelete,
     });
     seedPool(sm, "EvictableIssue", EvictableIssue, [
       { id: "i1", title: "A", teamId: "team-1" },
@@ -480,8 +446,7 @@ describe("sync-group-leave auto-evict", () => {
 
     await sm.deactivateSyncGroup("team-1");
 
-    expect(onSyncGroupDelete).toHaveBeenCalledWith("team-1", sm);
-    expect(sm.objectPool.getById("EvictableIssue", "i1")).toBeUndefined();
+    expect(sm.objectPool.getById("EvictableIssue", "i1")).toBeDefined();
   });
 });
 
