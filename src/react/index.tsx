@@ -323,13 +323,19 @@ const settled = (
 // eviction safety predicate (pool.isObserved) can protect them. Diffs the
 // snapshot IDs on each render and observes/unobserves the delta.
 
-function useObserveItems(
+/** @internal Exported for unit testing the observe/unobserve diffing. */
+export function useObserveItems(
   pool: ObjectPool,
   modelName: string,
   items: BaseModel[],
 ): void {
   const prevIds = useRef<Set<string>>(new Set());
 
+  // Diff each render: observe newly-added ids, unobserve removed ones. No
+  // cleanup here — React fires effect cleanup on every dependency change, and
+  // unobserving the whole set on each `items` change would drop the refcount
+  // for records that are still rendered (the next effect, seeing them already
+  // in `prevIds`, wouldn't re-observe them).
   useEffect(() => {
     const currentIds = new Set(items.map((m) => m.id));
     for (const id of currentIds) {
@@ -343,13 +349,17 @@ function useObserveItems(
       }
     }
     prevIds.current = currentIds;
+  }, [items, pool, modelName]);
 
+  // Release whatever is still observed on unmount only.
+  useEffect(() => {
     return () => {
-      for (const id of currentIds) {
+      for (const id of prevIds.current) {
         pool.unobserveInstance(modelName, id);
       }
+      prevIds.current = new Set();
     };
-  }, [items, pool, modelName]);
+  }, [pool, modelName]);
 }
 
 // Model-name-keyed implementations. The public hooks resolve a handle

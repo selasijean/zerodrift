@@ -2440,7 +2440,13 @@ export class StoreManager<TContext = unknown> {
       return poolCount;
     }
     const records = await this.database.readAllModels(modelName);
-    const ids = records.filter(predicate).map((r) => r.id as string);
+    let ids = records.filter(predicate).map((r) => r.id as string);
+    if (opts.safe === true) {
+      // Don't delete the IDB backing of a record the pool pass skipped
+      // (observed / dirty / in-flight) — that would orphan a live instance
+      // with no persisted row to reload from.
+      ids = ids.filter((id) => this.canEvict(modelName, id).safe);
+    }
     if (ids.length > 0) {
       await this.database.deleteModels(modelName, ids);
     }
@@ -2468,7 +2474,25 @@ export class StoreManager<TContext = unknown> {
       // so a future getOrLoadCollection rehydrates from IDB without refetch.
       return;
     }
-    await this.database.deleteModelsByIndex(modelName, indexKey, value);
+    if (opts.safe === true) {
+      // Filter the IDB delete to the same evictable set the pool pass used,
+      // so a record skipped for being observed / dirty / in-flight keeps its
+      // persisted row. Trades the bulk index delete for a per-id pass — fine
+      // on the opt-in safe path.
+      const records = await this.database.readModelsByIndex(
+        modelName,
+        indexKey,
+        value,
+      );
+      const ids = records
+        .map((r) => r.id as string)
+        .filter((id) => this.canEvict(modelName, id).safe);
+      if (ids.length > 0) {
+        await this.database.deleteModels(modelName, ids);
+      }
+    } else {
+      await this.database.deleteModelsByIndex(modelName, indexKey, value);
+    }
     this.partialIndexCoverage.delete(
       StoreManager.collectionKey(modelName, indexKey, value),
     );

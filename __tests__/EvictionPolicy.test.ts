@@ -451,6 +451,88 @@ describe("sync-group-leave via onSyncGroupDelete", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
+// { safe: true } must also gate the IDB delete, not just the pool pass.
+// A record skipped in the pool for being observed / dirty / in-flight must
+// keep its persisted row — otherwise a live instance is orphaned.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("safe eviction keeps IDB in sync with the pool", () => {
+  it("evictByIndex { safe } keeps the IDB row of an observed record", async () => {
+    sm = await makeManager({ initialGroups: ["team-1"] });
+    await seedPoolAndDb(sm, "EvictableIssue", EvictableIssue, [
+      { id: "i1", title: "Observed", teamId: "team-1" },
+      { id: "i2", title: "Free", teamId: "team-1" },
+    ]);
+    sm.objectPool.observeInstance("EvictableIssue", "i1");
+
+    await sm.evictByIndex("EvictableIssue", "teamId", "team-1", { safe: true });
+
+    // i1 skipped in the pool → its IDB row must survive.
+    expect(sm.objectPool.getById("EvictableIssue", "i1")).toBeDefined();
+    expect(await sm.database.readModel("EvictableIssue", "i1")).not.toBeNull();
+    // i2 was free → evicted from both pool and IDB.
+    expect(sm.objectPool.getById("EvictableIssue", "i2")).toBeUndefined();
+    expect(await sm.database.readModel("EvictableIssue", "i2")).toBeNull();
+
+    sm.objectPool.unobserveInstance("EvictableIssue", "i1");
+  });
+
+  it("evictByIndex { safe } keeps the IDB row of a dirty record", async () => {
+    sm = await makeManager({ initialGroups: ["team-1"] });
+    await seedPoolAndDb(sm, "EvictableIssue", EvictableIssue, [
+      { id: "i1", title: "Original", teamId: "team-1" },
+    ]);
+    const inst = sm.objectPool.getById<EvictableIssue>("EvictableIssue", "i1")!;
+    inst.title = "Changed";
+
+    await sm.evictByIndex("EvictableIssue", "teamId", "team-1", { safe: true });
+
+    expect(sm.objectPool.getById("EvictableIssue", "i1")).toBeDefined();
+    expect(await sm.database.readModel("EvictableIssue", "i1")).not.toBeNull();
+  });
+
+  it("evictByIndex without { safe } force-deletes the IDB row regardless", async () => {
+    sm = await makeManager({ initialGroups: ["team-1"] });
+    await seedPoolAndDb(sm, "EvictableIssue", EvictableIssue, [
+      { id: "i1", title: "Observed", teamId: "team-1" },
+    ]);
+    sm.objectPool.observeInstance("EvictableIssue", "i1");
+
+    await sm.evictByIndex("EvictableIssue", "teamId", "team-1");
+
+    // Unconditional path: observation is ignored, IDB row goes too.
+    expect(sm.objectPool.getById("EvictableIssue", "i1")).toBeUndefined();
+    await vi.waitFor(async () => {
+      expect(await sm.database.readModel("EvictableIssue", "i1")).toBeNull();
+    });
+
+    sm.objectPool.unobserveInstance("EvictableIssue", "i1");
+  });
+
+  it("evictWhere { safe } keeps the IDB row of an observed record", async () => {
+    sm = await makeManager({ initialGroups: ["team-1"] });
+    await seedPoolAndDb(sm, "EvictableIssue", EvictableIssue, [
+      { id: "i1", title: "Observed", teamId: "team-1" },
+      { id: "i2", title: "Free", teamId: "team-1" },
+    ]);
+    sm.objectPool.observeInstance("EvictableIssue", "i1");
+
+    await sm.evictWhere(
+      "EvictableIssue",
+      (m) => m.teamId === "team-1",
+      { safe: true },
+    );
+
+    expect(sm.objectPool.getById("EvictableIssue", "i1")).toBeDefined();
+    expect(await sm.database.readModel("EvictableIssue", "i1")).not.toBeNull();
+    expect(sm.objectPool.getById("EvictableIssue", "i2")).toBeUndefined();
+    expect(await sm.database.readModel("EvictableIssue", "i2")).toBeNull();
+
+    sm.objectPool.unobserveInstance("EvictableIssue", "i1");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Phase 3: Resident-count watermark
 // ═══════════════════════════════════════════════════════════════════════════
 
