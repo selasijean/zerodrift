@@ -72,6 +72,7 @@ import {
   type CommitRouteHandler,
   type CommitRouteResult,
   type OnModelTouchedHandler,
+  type ModelEvictionConfig,
 } from "./types.js";
 
 /**
@@ -107,6 +108,12 @@ export interface EvictOptions {
    */
   keepInDb?: boolean;
 }
+
+export type EvictBlockReason =
+  | "unsavedChanges"
+  | "inFlight"
+  | "observed"
+  | "strategyExempt";
 
 export interface BootstrapResponse {
   lastSyncId: number;
@@ -342,6 +349,14 @@ export interface AdvancedConfig<TContext = unknown> {
   undoableActions?: UndoableActionHandlers;
 }
 
+export interface EvictionConfig {
+  onSyncGroupLeave?: boolean;
+  keepInDb?: boolean;
+  keepInDbOnServerRemoval?: boolean;
+  maxResident?: number;
+  lowWaterRatio?: number;
+}
+
 /**
  * Public engine config, grouped by concern. `transport` is required
  * (carries the required `bootstrapFetcher`); the rest are optional.
@@ -353,6 +368,7 @@ export interface StoreManagerConfig<TContext = unknown> {
   persistence?: PersistenceConfig;
   hooks?: HooksConfig<TContext>;
   advanced?: AdvancedConfig<TContext>;
+  eviction?: EvictionConfig;
 }
 
 /**
@@ -380,6 +396,7 @@ export type NormalizedConfig<TContext = unknown> = Omit<
   onDemandIndexBatchFetcher?: IndexBatchFetcher;
   serverSupportsCompoundIndexKeys?: boolean;
   compoundIndexFetchThreshold?: number;
+  eviction?: EvictionConfig;
 };
 
 /** @internal Grouped public config → flat internal config. Single mapping
@@ -420,6 +437,7 @@ export function normalizeConfig<TContext = unknown>(
     routeCommit: c.advanced?.routeCommit,
     onModelTouched: c.advanced?.onModelTouched,
     undoableActions: c.advanced?.undoableActions,
+    eviction: c.eviction,
   };
 }
 
@@ -559,6 +577,16 @@ export class StoreManager<TContext = unknown> {
     }
     this.hasModelTouchedHandler = c.onModelTouched != null;
     BaseModel.storeManager = this; // wire auto-commit
+
+    this.objectPool.setRehydrator((modelName, id) => {
+      void this.getOrLoadById(modelName, id).catch((err) => {
+        this.emitError(err, { kind: "evictionRehydrate", modelName, id });
+      });
+    });
+
+    this.objectPool.setAfterPutCallback((modelName) => {
+      this.checkWatermark(modelName);
+    });
   }
 
   // ── Context (for identifierFn) ───────────────────────────────────────────
@@ -1543,28 +1571,61 @@ export class StoreManager<TContext = unknown> {
   private async handleSyncGroupsRemoved(
     removedGroups: string[],
   ): Promise<void> {
-    await this.fireOnSyncGroupDelete(removedGroups);
+    await this.fireOnSyncGroupDelete(removedGroups, true);
   }
 
   /**
-   * Fire `onSyncGroupDelete` once per group, serially. Errors thrown by the
-   * adopter's callback are caught and routed to `onError` so one bad group
-   * doesn't abort cleanup for the rest.
+   * Fire auto-evict for sync-group-leave (if configured), then the adopter's
+   * `onSyncGroupDelete` callback. Errors are caught per group so one bad
+   * group doesn't abort cleanup for the rest.
    */
   private async fireOnSyncGroupDelete(
     groupIds: string[] | Iterable<string>,
+    serverPushed = false,
   ): Promise<void> {
-    const cb = this.config.onSyncGroupDelete;
-    if (cb == null) {
-      return;
-    }
+    const evictionCfg = this.config.eviction;
+    const autoEvict =
+      evictionCfg?.onSyncGroupLeave === true ||
+      this.syncGroupKeyModels().length > 0;
+
     for (const g of groupIds) {
-      try {
-        await cb(g, this);
-      } catch (err) {
-        this.emitError(err, { kind: "onSyncGroupDelete", groupId: g });
+      if (autoEvict) {
+        const keepInDb = serverPushed
+          ? (evictionCfg?.keepInDbOnServerRemoval ?? false)
+          : (evictionCfg?.keepInDb ?? true);
+        for (const meta of this.syncGroupKeyModels()) {
+          const sgk = (meta.eviction as { syncGroupKey: string }).syncGroupKey;
+          this.runEvictionLoop(
+            meta.name,
+            (record) => prop(record, sgk) === g,
+            { keepInDb },
+          );
+        }
+      }
+
+      const cb = this.config.onSyncGroupDelete;
+      if (cb != null) {
+        try {
+          await cb(g, this);
+        } catch (err) {
+          this.emitError(err, { kind: "onSyncGroupDelete", groupId: g });
+        }
       }
     }
+  }
+
+  private syncGroupKeyModelsCache: ModelMeta[] | null = null;
+
+  private syncGroupKeyModels(): ModelMeta[] {
+    if (this.syncGroupKeyModelsCache != null) {
+      return this.syncGroupKeyModelsCache;
+    }
+    this.syncGroupKeyModelsCache = ModelRegistry.allModels().filter(
+      (meta) =>
+        typeof meta.eviction === "object" &&
+        meta.eviction.syncGroupKey != null,
+    );
+    return this.syncGroupKeyModelsCache;
   }
 
   /**
@@ -2266,6 +2327,110 @@ export class StoreManager<TContext = unknown> {
   }
 
   // ── Eviction helpers ──────────────────────────────────────────────────────
+
+  canEvict(
+    modelName: string,
+    id: string,
+  ): { safe: boolean; reason?: EvictBlockReason } {
+    const meta = ModelRegistry.getModelMeta(modelName);
+    if (meta != null) {
+      if (meta.eviction === false) {
+        return { safe: false, reason: "strategyExempt" };
+      }
+      const ls = meta.loadStrategy;
+      if (ls === LoadStrategy.LocalOnly) {
+        return { safe: false, reason: "strategyExempt" };
+      }
+      if (ls === LoadStrategy.Eager && meta.eviction == null) {
+        return { safe: false, reason: "strategyExempt" };
+      }
+    }
+    const instance = this.objectPool.getById(modelName, id);
+    if (instance != null && instance.hasUnsavedChanges) {
+      return { safe: false, reason: "unsavedChanges" };
+    }
+    if (this.transactionQueue.hasInFlight(modelName, id)) {
+      return { safe: false, reason: "inFlight" };
+    }
+    if (this.objectPool.isObserved(modelName, id)) {
+      return { safe: false, reason: "observed" };
+    }
+    return { safe: true };
+  }
+
+  private resolveMaxResident(modelName: string): number | undefined {
+    const meta = ModelRegistry.getModelMeta(modelName);
+    if (meta?.eviction === false) {
+      return undefined;
+    }
+    const perModel = typeof meta?.eviction === "object" ? meta.eviction.maxResident : undefined;
+    if (perModel != null) {
+      return perModel;
+    }
+    return this.config.eviction?.maxResident;
+  }
+
+  private checkWatermark(modelName: string): void {
+    const max = this.resolveMaxResident(modelName);
+    if (max == null) {
+      return;
+    }
+    const count = this.objectPool.getAll(modelName).length;
+    if (count <= max) {
+      return;
+    }
+    this.runEvictionLoop(modelName, null, {
+      keepInDb: true,
+      maxToKeep: max,
+    });
+  }
+
+  private runEvictionLoop(
+    modelName: string,
+    predicate: ((record: BaseModel) => boolean) | null,
+    opts: { keepInDb: boolean; maxToKeep?: number },
+  ): string[] {
+    const all = this.objectPool.getAll(modelName);
+    const entries = [...all];
+    const lowWaterRatio = this.config.eviction?.lowWaterRatio ?? 0.75;
+    let targetCount: number | null = null;
+    if (opts.maxToKeep != null) {
+      targetCount = entries.length - Math.floor(opts.maxToKeep * lowWaterRatio);
+      if (targetCount <= 0) {
+        return [];
+      }
+    }
+
+    const evictedIds: string[] = [];
+    for (const record of entries) {
+      if (predicate != null && !predicate(record)) {
+        continue;
+      }
+      const result = this.canEvict(modelName, record.id);
+      if (!result.safe) {
+        continue;
+      }
+      evictedIds.push(record.id);
+      if (targetCount != null && evictedIds.length >= targetCount) {
+        break;
+      }
+    }
+
+    if (evictedIds.length === 0) {
+      return [];
+    }
+
+    this.objectPool.evictBatch(modelName, evictedIds);
+    for (const id of evictedIds) {
+      this.loadedIds.delete(StoreManager.modelIdKey(modelName, id));
+    }
+
+    if (!opts.keepInDb) {
+      void this.database.deleteModels(modelName, evictedIds).catch(() => {});
+    }
+
+    return evictedIds;
+  }
 
   /** Walk the pool for `modelName`, removing instances matching `predicate`. */
   private evictFromPool(

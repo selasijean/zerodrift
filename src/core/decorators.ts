@@ -23,6 +23,7 @@ import {
   LoadStrategy,
   type PropertyMeta,
   type ModelMeta,
+  type ModelEvictionConfig,
 } from "./types.js";
 import {
   installBackRefAccessor,
@@ -151,6 +152,7 @@ export function ClientModel(
     loadStrategy?: LoadStrategy;
     usedForPartialIndexes?: boolean;
     schemaVersion?: number;
+    eviction?: ModelEvictionConfig;
   } = {},
 ) {
   // Legacy decorator target — no better type exists for prototype manipulation
@@ -182,6 +184,9 @@ export function ClientModel(
     }
     if (opts.schemaVersion != null) {
       meta.schemaVersion = opts.schemaVersion;
+    }
+    if (opts.eviction !== undefined) {
+      meta.eviction = opts.eviction;
     }
     // Drain decorator-stashed metadata for this class and every ancestor up
     // the prototype chain. Abstract bases never registered themselves; their

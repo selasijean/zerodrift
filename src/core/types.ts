@@ -133,6 +133,12 @@ export interface PropertyMeta {
   coveringIndexes?: string[];
 }
 
+/** Per-model eviction configuration. `false` explicitly disables eviction. */
+export type ModelEvictionConfig = false | {
+  syncGroupKey?: string;
+  maxResident?: number;
+};
+
 /** Metadata about a model class, stored in the ModelRegistry. */
 export interface ModelMeta {
   name: string;
@@ -143,6 +149,7 @@ export interface ModelMeta {
   computedProps: Set<string>;
   ctor: new () => BaseModel;
   schemaVersion: number;
+  eviction?: ModelEvictionConfig;
 }
 
 /**
@@ -354,7 +361,8 @@ export type EngineErrorContext =
       modelName: string;
       modelId: string;
     }
-  | { kind: "onModelTouched"; modelName: string; modelId: string };
+  | { kind: "onModelTouched"; modelName: string; modelId: string }
+  | { kind: "evictionRehydrate"; modelName: string; id: string };
 
 export type EngineErrorHandler = (
   err: Error,
