@@ -87,6 +87,11 @@ async function makeManager(opts: {
     groupId: string,
     sm: StoreManager,
   ) => void | Promise<void>;
+  onDemandFetcher?: (
+    modelName: string,
+    indexKey: string,
+    value: string,
+  ) => Promise<Record<string, unknown>[]>;
   bootstrap?: boolean;
 } = {}) {
   const adapter = new MemoryAdapter();
@@ -103,6 +108,10 @@ async function makeManager(opts: {
     },
     persistence: { storageAdapter: adapter },
     hooks: { onSyncGroupDelete: opts.onSyncGroupDelete },
+    loading:
+      opts.onDemandFetcher != null
+        ? { onDemand: { mode: "perKey", fetch: opts.onDemandFetcher } }
+        : undefined,
     eviction: opts.eviction,
   });
   if (opts.bootstrap === true) {
@@ -527,6 +536,55 @@ describe("safe eviction keeps IDB in sync with the pool", () => {
     expect(await sm.database.readModel("EvictableIssue", "i1")).not.toBeNull();
     expect(sm.objectPool.getById("EvictableIssue", "i2")).toBeUndefined();
     expect(await sm.database.readModel("EvictableIssue", "i2")).toBeNull();
+
+    sm.objectPool.unobserveInstance("EvictableIssue", "i1");
+  });
+
+  it("evictByIndex { safe } preserves collection coverage when nothing is evictable", async () => {
+    const fetcher = vi.fn().mockResolvedValue([
+      { id: "i1", title: "A", teamId: "team-1" },
+      { id: "i2", title: "B", teamId: "team-1" },
+    ]);
+    sm = await makeManager({ initialGroups: ["team-1"], onDemandFetcher: fetcher });
+
+    // Establish coverage via a server fetch, then pin both records.
+    await sm.getOrLoadCollection("EvictableIssue", "teamId", "team-1");
+    expect(sm.isCollectionLoaded("EvictableIssue", "teamId", "team-1")).toBe(true);
+    sm.objectPool.observeInstance("EvictableIssue", "i1");
+    sm.objectPool.observeInstance("EvictableIssue", "i2");
+
+    await sm.evictByIndex("EvictableIssue", "teamId", "team-1", { safe: true });
+
+    // Nothing was evictable → IDB still complete → coverage intact, no refetch.
+    expect(sm.isCollectionLoaded("EvictableIssue", "teamId", "team-1")).toBe(true);
+    expect(sm.objectPool.getById("EvictableIssue", "i1")).toBeDefined();
+    expect(sm.objectPool.getById("EvictableIssue", "i2")).toBeDefined();
+    await sm.getOrLoadCollection("EvictableIssue", "teamId", "team-1");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+
+    sm.objectPool.unobserveInstance("EvictableIssue", "i1");
+    sm.objectPool.unobserveInstance("EvictableIssue", "i2");
+  });
+
+  it("evictByIndex { safe } clears coverage when some records are evicted", async () => {
+    const fetcher = vi.fn().mockResolvedValue([
+      { id: "i1", title: "A", teamId: "team-1" },
+      { id: "i2", title: "B", teamId: "team-1" },
+    ]);
+    sm = await makeManager({ initialGroups: ["team-1"], onDemandFetcher: fetcher });
+
+    await sm.getOrLoadCollection("EvictableIssue", "teamId", "team-1");
+    sm.objectPool.observeInstance("EvictableIssue", "i1"); // pin only one
+
+    await sm.evictByIndex("EvictableIssue", "teamId", "team-1", { safe: true });
+
+    // i2 was evicted → IDB now partial → coverage torn down so the next load
+    // refetches the full set from the server.
+    expect(sm.isCollectionLoaded("EvictableIssue", "teamId", "team-1")).toBe(false);
+    expect(sm.objectPool.getById("EvictableIssue", "i1")).toBeDefined();
+    expect(sm.objectPool.getById("EvictableIssue", "i2")).toBeUndefined();
+    await sm.getOrLoadCollection("EvictableIssue", "teamId", "team-1");
+    expect(fetcher).toHaveBeenCalledTimes(2);
 
     sm.objectPool.unobserveInstance("EvictableIssue", "i1");
   });

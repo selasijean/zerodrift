@@ -2461,6 +2461,9 @@ export class StoreManager<TContext = unknown> {
    * indexKey, value)` re-fetches from the server instead of trusting IDB.
    * Pass `{ keepInDb: true }` to release only the pool — IDB rows and the
    * coverage entry are left intact, so the next load rehydrates from IDB.
+   * Pass `{ safe: true }` to skip records that are observed, dirty, or
+   * in-flight; the IDB delete is filtered to match, and if nothing turns out
+   * to be evictable the coverage entry is left intact (no forced refetch).
    */
   async evictByIndex(
     modelName: string,
@@ -2487,9 +2490,13 @@ export class StoreManager<TContext = unknown> {
       const ids = records
         .map((r) => r.id as string)
         .filter((id) => this.canEvict(modelName, id).safe);
-      if (ids.length > 0) {
-        await this.database.deleteModels(modelName, ids);
+      if (ids.length === 0) {
+        // Nothing was evictable, so IDB still holds the complete collection.
+        // Leave the coverage marker intact — tearing it down would force a
+        // pointless server refetch on the next getOrLoadCollection.
+        return;
       }
+      await this.database.deleteModels(modelName, ids);
     } else {
       await this.database.deleteModelsByIndex(modelName, indexKey, value);
     }
