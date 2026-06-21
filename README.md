@@ -19,7 +19,7 @@ The design is inspired by Linear's sync engine; see [Acknowledgments](#acknowled
 - **Optimistic writes with real recovery**: local changes update immediately, batch into transaction POSTs, persist through reloads, and reconcile when matching server deltas arrive.
 - **Relationships that stay live**: references, inverse collections, owned collections, and indexed lookups update as records hydrate, load lazily, or arrive over SSE.
 - **Schema or class models**: use decorators (`@ClientModel`, `@Property`, `@Reference`) or schema-as-data (`defineSchema(...)`, `entityFromZod(...)`) without `reflect-metadata`.
-- **Memory you can shape**: choose per-model `LoadStrategy` values for eager data, lazy tables, partial index-backed loading, local-only records, or ephemeral SSE-fed state.
+- **Memory you can shape**: choose per-model `LoadStrategy` values for eager data, lazy tables, partial index-backed loading, local-only records, or ephemeral SSE-fed state. Declarative eviction policies cap pool size and auto-evict when sync groups change.
 - **Undo/redo built into the transaction layer**: track field-level changes, group atomic multi-model edits, and include custom remote actions in the same undo stack.
 - **React, browser, or headless Node**: use `<SyncProvider>` and typed hooks in React, or run `StoreManager` directly in agents, workers, CLIs, and tests.
 - **Your backend, your stack**: implement three HTTP endpoints in any language, with a reference Go backend and Next.js demo included.
@@ -87,6 +87,50 @@ export class Issue extends BaseModel {
 `@Property` fields are persisted and observable. `@Reference`, `@ReferenceCollection`, `@OwnedCollection`, and `@BackReference` describe relationships; `Lazy*` variants load on demand. `loadStrategy` controls whether a model loads during bootstrap or only when requested. Pass an explicit `@ClientModel({ name })` — it's the registry key and the `useRecord(Model, …)` handle; without it the class name is used, which minifiers mangle in production.
 
 See [agent-docs/01-models-and-decorators.md](agent-docs/01-models-and-decorators.md) for the full decorator reference.
+
+## Eviction
+
+By default, records stay in memory for the session. The declarative eviction policy lets you bound the pool without manual cache management.
+
+```ts
+@ClientModel({
+  name: "Comment",
+  loadStrategy: LoadStrategy.Partial,
+  eviction: { syncGroupKey: "teamId", maxResident: 500 },
+})
+export class Comment extends BaseModel {
+  @Property({ indexed: true }) public teamId = "";
+  @Property() public body = "";
+}
+```
+
+| Option | Effect |
+|---|---|
+| `syncGroupKey` | Auto-evict records when `deactivateSyncGroup(groupId)` fires or the server pushes `removedSyncGroups`. Records whose `syncGroupKey` field matches the group are evicted. |
+| `maxResident` | FIFO watermark. When the pool exceeds this count after a new insert, oldest records are evicted down to `lowWaterRatio` (default 0.75). Evicted records stay in IDB for fast reload. |
+| `false` | Exempt a model from eviction entirely, even if a global `maxResident` is configured. |
+
+Global defaults can be set in `StoreManagerConfig.eviction`:
+
+```ts
+new StoreManager({
+  // ...
+  eviction: {
+    maxResident: 1000,        // global cap (per-model overrides win)
+    lowWaterRatio: 0.75,      // evict down to 75% of maxResident
+    keepInDb: true,           // user-initiated deactivation keeps IDB rows
+    keepInDbOnServerRemoval: false, // server-pushed removal purges IDB
+  },
+});
+```
+
+**Safety guarantees.** The eviction loop never evicts a record that:
+- has **unsaved changes** (dirty fields not yet committed)
+- has an **in-flight transaction** (sent to server, awaiting confirmation)
+- is **observed by a mounted React hook** (`useRecord`, `useRecords`, `useRecordsByIndex`)
+- belongs to a model with `LoadStrategy.LocalOnly` or `eviction: false`
+
+**Self-heal.** When a `@Reference` getter reads an evicted target, the engine detects the eviction marker, reloads the record from IDB or the server in the background, and the reference resolves on the next render. React hooks detect "had data, lost it to eviction" and call `reload()` automatically. From the component's perspective, the record briefly disappears and reappears.
 
 ## Schema-first with Zod
 
