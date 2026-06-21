@@ -292,6 +292,13 @@ export class ObjectPool {
     }
 
     this.notify(modelName, instance);
+
+    // Watermark check runs on every genuinely new insert — covers both the
+    // hydrate path (hydrateAndPut → put) and direct creates (commitCreate →
+    // put). Re-puts for an in-place hydrate don't grow the pool, so skip them.
+    if (wasNew && this.afterPutCallback != null) {
+      this.afterPutCallback(modelName);
+    }
   }
 
   /** Remove a model. Notifies subscribers. */
@@ -359,9 +366,6 @@ export class ObjectPool {
     inst.hydrate(data);
     inst.makeModelObservable();
     this.put(modelName, inst);
-    if (this.afterPutCallback != null) {
-      this.afterPutCallback(modelName);
-    }
     return inst;
   }
 

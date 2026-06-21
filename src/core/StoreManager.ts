@@ -355,8 +355,6 @@ export interface AdvancedConfig<TContext = unknown> {
 }
 
 export interface EvictionConfig {
-  keepInDb?: boolean;
-  keepInDbOnServerRemoval?: boolean;
   maxResident?: number;
   lowWaterRatio?: number;
 }
@@ -2471,7 +2469,11 @@ export class StoreManager<TContext = unknown> {
     value: string,
     opts: EvictOptions = {},
   ): Promise<void> {
-    this.evictFromPool(modelName, (m) => m[indexKey] === value, opts.safe);
+    const poolCount = this.evictFromPool(
+      modelName,
+      (m) => m[indexKey] === value,
+      opts.safe,
+    );
     if (opts.keepInDb === true) {
       // Pool-only release: IDB rows and the collection-coverage entry stay,
       // so a future getOrLoadCollection rehydrates from IDB without refetch.
@@ -2490,13 +2492,17 @@ export class StoreManager<TContext = unknown> {
       const ids = records
         .map((r) => r.id as string)
         .filter((id) => this.canEvict(modelName, id).safe);
-      if (ids.length === 0) {
-        // Nothing was evictable, so IDB still holds the complete collection.
+      if (poolCount === 0 && ids.length === 0) {
+        // Nothing left the pool OR IDB, so the local copy is still complete.
         // Leave the coverage marker intact — tearing it down would force a
-        // pointless server refetch on the next getOrLoadCollection.
+        // pointless server refetch on the next getOrLoadCollection. (Pool-only
+        // models like Ephemeral can evict from the pool with no IDB rows, so
+        // `poolCount` must be checked too, not just the IDB delete list.)
         return;
       }
-      await this.database.deleteModels(modelName, ids);
+      if (ids.length > 0) {
+        await this.database.deleteModels(modelName, ids);
+      }
     } else {
       await this.database.deleteModelsByIndex(modelName, indexKey, value);
     }

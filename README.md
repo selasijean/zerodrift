@@ -146,7 +146,7 @@ Pass `{ safe: true }` to skip records that are observed, dirty, or in-flight. Pa
 - is **observed by a mounted React hook** (`useRecord`, `useRecords`, `useRecordsByIndex`)
 - belongs to a model with `LoadStrategy.LocalOnly` or `eviction: false`
 
-**Self-heal.** When a `@Reference` getter reads an evicted target, the engine detects the eviction marker, reloads the record from IDB or the server in the background, and the reference resolves on the next render. React hooks detect "had data, lost it to eviction" and call `reload()` automatically. From the component's perspective, the record briefly disappears and reappears.
+**Self-heal (watermark only).** Watermark eviction is involuntary, so it's reversible: evicted records are marked, and if a `@Reference` getter or a mounted React hook still needs one, the engine reloads it from IDB in the background and it reappears on the next render. Explicit `evictByIndex` / `evictWhere` are deliberate removals — they do **not** self-heal, which is what makes sync-group cleanup actually clear the data instead of reloading it.
 
 ## Schema-first with Zod
 

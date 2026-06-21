@@ -63,6 +63,18 @@ class WatermarkItem extends BaseModel {
 }
 
 @ClientModel({
+  name: "EphemeralColl",
+  loadStrategy: LoadStrategy.Ephemeral,
+})
+class EphemeralColl extends BaseModel {
+  @Property()
+  public label = "";
+
+  @Property({ indexed: true })
+  public teamId = "";
+}
+
+@ClientModel({
   name: "NoEvictModel",
   loadStrategy: LoadStrategy.Partial,
   eviction: false,
@@ -76,8 +88,6 @@ class NoEvictModel extends BaseModel {
 
 async function makeManager(opts: {
   eviction?: {
-    keepInDb?: boolean;
-    keepInDbOnServerRemoval?: boolean;
     maxResident?: number;
     lowWaterRatio?: number;
   };
@@ -588,6 +598,28 @@ describe("safe eviction keeps IDB in sync with the pool", () => {
 
     sm.objectPool.unobserveInstance("EvictableIssue", "i1");
   });
+
+  it("evictByIndex { safe } clears coverage for pool-only (Ephemeral) eviction", async () => {
+    const fetcher = vi.fn().mockResolvedValue([
+      { id: "e1", label: "A", teamId: "team-1" },
+      { id: "e2", label: "B", teamId: "team-1" },
+    ]);
+    sm = await makeManager({ initialGroups: ["team-1"], onDemandFetcher: fetcher });
+
+    await sm.getOrLoadCollection("EphemeralColl", "teamId", "team-1");
+    expect(sm.isCollectionLoaded("EphemeralColl", "teamId", "team-1")).toBe(true);
+    expect(sm.objectPool.getAll<EphemeralColl>("EphemeralColl").length).toBe(2);
+
+    // Pool-only model: records leave the pool but there are no IDB rows, so the
+    // safe IDB delete list is empty. Coverage must still clear (poolCount > 0),
+    // else the next load short-circuits and the collection stays empty.
+    await sm.evictByIndex("EphemeralColl", "teamId", "team-1", { safe: true });
+
+    expect(sm.objectPool.getAll<EphemeralColl>("EphemeralColl").length).toBe(0);
+    expect(sm.isCollectionLoaded("EphemeralColl", "teamId", "team-1")).toBe(false);
+    await sm.getOrLoadCollection("EphemeralColl", "teamId", "team-1");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -630,6 +662,22 @@ describe("watermark eviction (maxResident)", () => {
 
     expect(sm.objectPool.getAll("WatermarkItem").length).toBe(5);
     expect(sm.objectPool.getById("WatermarkItem", "w1")).toBeDefined();
+  });
+
+  it("fires on direct put (create path), not just hydrateAndPut", async () => {
+    sm = await makeManager();
+
+    // addToPool → objectPool.put, the path commitCreate uses for local creates
+    // (store.create / draft().save()). Before the fix the watermark callback
+    // only ran from hydrateAndPut, so creates blew past maxResident unbounded.
+    for (let i = 1; i <= 8; i++) {
+      const inst = new WatermarkItem();
+      inst.hydrate({ id: `w${i}`, label: `Item ${i}` });
+      addToPool(sm, "WatermarkItem", inst);
+    }
+
+    expect(sm.objectPool.getAll("WatermarkItem").length).toBeLessThanOrEqual(5);
+    expect(sm.objectPool.getById("WatermarkItem", "w8")).toBeDefined();
   });
 
   it("skips observed records during watermark eviction", async () => {
