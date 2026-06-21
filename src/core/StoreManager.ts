@@ -2301,17 +2301,8 @@ export class StoreManager<TContext = unknown> {
     id: string,
   ): { safe: boolean; reason?: EvictBlockReason } {
     const meta = ModelRegistry.getModelMeta(modelName);
-    if (meta != null) {
-      if (meta.eviction === false) {
-        return { safe: false, reason: "strategyExempt" };
-      }
-      const ls = meta.loadStrategy;
-      if (ls === LoadStrategy.LocalOnly) {
-        return { safe: false, reason: "strategyExempt" };
-      }
-      if (ls === LoadStrategy.Eager && meta.eviction == null) {
-        return { safe: false, reason: "strategyExempt" };
-      }
+    if (this.isStrategyExempt(meta)) {
+      return { safe: false, reason: "strategyExempt" };
     }
     const instance = this.objectPool.getById(modelName, id);
     if (instance != null && instance.hasUnsavedChanges) {
@@ -2326,16 +2317,41 @@ export class StoreManager<TContext = unknown> {
     return { safe: true };
   }
 
+  /**
+   * Strategy/config exemptions shared by `canEvict` and `resolveMaxResident`
+   * so the two never drift. A model is never evicted when it sets
+   * `eviction: false`, is `LocalOnly`, or is `Eager` without an explicit
+   * eviction config — `Eager` means "always resident", so a global
+   * `maxResident` does not apply to it unless it opts in with its own
+   * `eviction` config (`eviction: {}` accepts the global cap).
+   */
+  private isStrategyExempt(meta: ModelMeta | undefined): boolean {
+    if (meta == null) {
+      return false;
+    }
+    if (meta.eviction === false) {
+      return true;
+    }
+    if (meta.loadStrategy === LoadStrategy.LocalOnly) {
+      return true;
+    }
+    if (meta.loadStrategy === LoadStrategy.Eager && meta.eviction == null) {
+      return true;
+    }
+    return false;
+  }
+
   private resolveMaxResident(modelName: string): number | undefined {
     const meta = ModelRegistry.getModelMeta(modelName);
-    if (meta?.eviction === false) {
+    if (this.isStrategyExempt(meta)) {
+      // Exempt models never arm the watermark — otherwise every insert past a
+      // global `maxResident` runs a full eviction sweep that `canEvict` blocks
+      // on every record anyway (O(n) per insert, O(n²) over a bulk hydrate).
       return undefined;
     }
-    const perModel = typeof meta?.eviction === "object" ? meta.eviction.maxResident : undefined;
-    if (perModel != null) {
-      return perModel;
-    }
-    return this.config.eviction?.maxResident;
+    const perModel =
+      typeof meta?.eviction === "object" ? meta.eviction.maxResident : undefined;
+    return perModel ?? this.config.eviction?.maxResident;
   }
 
   private checkWatermark(modelName: string, protectId?: string): void {

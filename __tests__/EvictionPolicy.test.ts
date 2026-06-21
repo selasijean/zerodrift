@@ -74,6 +74,27 @@ class EphemeralColl extends BaseModel {
   public teamId = "";
 }
 
+// Eager with no eviction config — "always resident", exempt from a global cap.
+@ClientModel({
+  name: "EagerDefault",
+  loadStrategy: LoadStrategy.Eager,
+})
+class EagerDefault extends BaseModel {
+  @Property()
+  public label = "";
+}
+
+// Eager that opts into eviction with an empty config — accepts the global cap.
+@ClientModel({
+  name: "EagerOptIn",
+  loadStrategy: LoadStrategy.Eager,
+  eviction: {},
+})
+class EagerOptIn extends BaseModel {
+  @Property()
+  public label = "";
+}
+
 @ClientModel({
   name: "NoEvictModel",
   loadStrategy: LoadStrategy.Partial,
@@ -773,6 +794,35 @@ describe("watermark eviction (maxResident)", () => {
     }
 
     expect(sm.objectPool.getAll("WatermarkItem").length).toBeLessThanOrEqual(5);
+  });
+
+  it("global maxResident does not apply to Eager models without eviction config", async () => {
+    sm = await makeManager({ eviction: { maxResident: 3 } });
+    const meta = ModelRegistry.getModelMeta("EagerDefault")!;
+
+    for (let i = 1; i <= 6; i++) {
+      sm.objectPool.hydrateAndPut("EagerDefault", meta, {
+        id: `e${i}`,
+        label: `Item ${i}`,
+      });
+    }
+
+    // Eager is "always resident": the global cap must not silently evict it.
+    expect(sm.objectPool.getAll<EagerDefault>("EagerDefault").length).toBe(6);
+  });
+
+  it("an Eager model with eviction: {} opts into the global maxResident", async () => {
+    sm = await makeManager({ eviction: { maxResident: 3 } });
+    const meta = ModelRegistry.getModelMeta("EagerOptIn")!;
+
+    for (let i = 1; i <= 6; i++) {
+      sm.objectPool.hydrateAndPut("EagerOptIn", meta, {
+        id: `e${i}`,
+        label: `Item ${i}`,
+      });
+    }
+
+    expect(sm.objectPool.getAll<EagerOptIn>("EagerOptIn").length).toBeLessThanOrEqual(3);
   });
 
   it("watermark always uses keepInDb: true", async () => {

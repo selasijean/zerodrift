@@ -56,7 +56,7 @@ Available strategies: `Eager` (the default — in bootstrap, fully resident), `L
 
 `usedForPartialIndexes: true` means other models can use this model's ID fields as index keys in IndexedDB (used by `RefCollection` queries).
 
-`eviction` controls the declarative eviction policy. Set `false` to exempt a model from eviction entirely. Set `{ maxResident: 500 }` to cap the pool size with FIFO watermark eviction. For sync-group cleanup, use the `onSyncGroupDelete` callback with `evictByIndex`. See `02-object-pool.md` and `04-lazy-loading.md` for details.
+`eviction` controls the declarative eviction policy. Set `false` to exempt a model from eviction entirely. Set `{ maxResident: 500 }` to cap the pool size with FIFO watermark eviction. `Eager` and `LocalOnly` models are exempt by default (a global `eviction.maxResident` does not touch them) — an `Eager` model opts in with its own `eviction` config, where `eviction: {}` accepts the global cap. For sync-group cleanup, use the `onSyncGroupDelete` callback with `evictByIndex`. See `02-object-pool.md` and `04-lazy-loading.md` for details.
 
 #### Abstract base classes
 

@@ -116,11 +116,13 @@ Global defaults in `StoreManagerConfig.eviction`:
 new StoreManager({
   // ...
   eviction: {
-    maxResident: 1000,        // global cap (per-model overrides win)
+    maxResident: 1000,        // cap for eviction-eligible models
     lowWaterRatio: 0.75,      // evict down to 75% of maxResident
   },
 });
 ```
+
+The global cap applies to **eviction-eligible** models — `Lazy`, `Partial`, and `Ephemeral`. `Eager` and `LocalOnly` models are exempt by default (`Eager` means "always resident"). To subject an `Eager` model to eviction, give it an explicit config: `eviction: {}` accepts the global cap, `eviction: { maxResident: N }` sets a per-model one. A per-model `maxResident` always wins over the global value.
 
 ### Sync-group cleanup (explicit)
 
