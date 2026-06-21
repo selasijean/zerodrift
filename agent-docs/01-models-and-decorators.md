@@ -56,6 +56,8 @@ Available strategies: `Eager` (the default — in bootstrap, fully resident), `L
 
 `usedForPartialIndexes: true` means other models can use this model's ID fields as index keys in IndexedDB (used by `RefCollection` queries).
 
+`eviction` controls the declarative eviction policy. Set `false` to exempt a model from eviction entirely. Set `{ syncGroupKey: "teamId" }` to auto-evict records when the matching sync group is deactivated. Set `{ maxResident: 500 }` to cap the pool size with FIFO watermark eviction. Both options can be combined. See `02-object-pool.md` and `04-lazy-loading.md` for details.
+
 #### Abstract base classes
 
 `@Property` / `@Reference` / `@Action` / `@Computed` and friends do **not** register a model on their own. They stash their metadata in a per-class side-table; only `@ClientModel` registers a model and at that point drains the side-table for the concrete class plus every ancestor up the prototype chain. So you can declare shared fields on an abstract base without registering it:

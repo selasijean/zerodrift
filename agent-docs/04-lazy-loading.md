@@ -157,11 +157,14 @@ When user opens Issue X's document:
 
 The heap grows proportionally to what's been viewed, not the total workspace size.
 
-### The Trade-off
+### Eviction keeps the heap bounded
 
-The heap never shrinks. There's no eviction — once a Comment is loaded into the pool, it stays there for the session. If the user browses through 50 teams over an hour, all their comments accumulate. This is acceptable for most sessions but can become significant for very long-lived sessions on large workspaces.
+By default, once a record is loaded into the pool it stays there for the session. For long-lived sessions on large workspaces, this can accumulate. The declarative eviction policy addresses this with two triggers:
 
-This is a deliberate trade-off: eviction requires cache invalidation logic (what if a comment in the pool gets stale?), and the complexity cost was deemed higher than the memory cost for typical usage patterns.
+- **Sync-group-leave.** Models that declare `eviction: { syncGroupKey: "teamId" }` are automatically evicted when `deactivateSyncGroup` fires or the server pushes `removedSyncGroups`. User-initiated deactivation defaults to `keepInDb: true` (IDB rows stay for fast rehydration); server-pushed removal defaults to `keepInDb: false`.
+- **Watermark.** Models that declare `eviction: { maxResident: N }` (or a global `eviction.maxResident` in `StoreManagerConfig`) are evicted FIFO down to `lowWaterRatio` (default 0.75) whenever the pool count exceeds the cap. Watermark always uses `keepInDb: true`.
+
+The safety predicate (`canEvict`) refuses to evict records with unsaved changes, in-flight transactions, or active observation refcounts (records being rendered by React hooks). Records evicted from the pool are marked so the self-heal path can reload them from IDB when a `@Reference` getter or React hook accesses them. See `02-object-pool.md` for the self-heal mechanism.
 
 ## Eager vs lazy — pick the decorator
 
