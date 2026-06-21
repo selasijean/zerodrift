@@ -12,7 +12,7 @@ import { BaseModel } from "@zerodrift/BaseModel";
 import { LoadStrategy } from "@zerodrift/types";
 import { ClientModel, Property, LazyReference } from "@zerodrift/decorators";
 import { ModelRegistry } from "@zerodrift/ModelRegistry";
-import { addToPool, TestProject, TestTask } from "./fixtures";
+import { addToPool, TestTask } from "./fixtures";
 
 // ── Test-only model fixtures ────────────────────────────────────────────────
 
@@ -155,7 +155,7 @@ describe("@Reference self-heal on eviction", () => {
 
     sm.objectPool.evictInstance("RefTarget", "t1");
 
-    holder.target;
+    void holder.target;
 
     await vi.waitFor(() => {
       expect(sm.objectPool.getById("RefTarget", "t1")).toBeDefined();

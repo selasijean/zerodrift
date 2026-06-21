@@ -72,7 +72,6 @@ import {
   type CommitRouteHandler,
   type CommitRouteResult,
   type OnModelTouchedHandler,
-  type ModelEvictionConfig,
 } from "./types.js";
 
 /**

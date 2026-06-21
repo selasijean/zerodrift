@@ -1,4 +1,4 @@
-import type { LoadStrategy, OnDelete } from "../core/types.js";
+import type { LoadStrategy, ModelEvictionConfig, OnDelete } from "../core/types.js";
 
 export type FieldKind =
   | "id"
@@ -47,6 +47,7 @@ export interface EntityDef<
   F extends Record<string, AnyFieldBuilder> = Record<string, AnyFieldBuilder>,
 > {
   loadStrategy: LoadStrategy;
+  eviction?: ModelEvictionConfig;
   usedForPartialIndexes?: boolean;
   /** Override the registry name. Defaults to PascalCase of the entity key at compile time. */
   name?: string;

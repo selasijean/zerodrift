@@ -104,9 +104,11 @@ export class Comment extends BaseModel {
 }
 ```
 
+When the server pushes `removedSyncGroups: ["team-eng"]` (or the client calls `deactivateSyncGroup("team-eng")`), the engine walks every Comment and evicts records where `comment.teamId === "team-eng"`. The `syncGroupKey` names the property whose value is compared against the deactivated group ID.
+
 | Option | Effect |
 |---|---|
-| `syncGroupKey` | Auto-evict records when `deactivateSyncGroup(groupId)` fires or the server pushes `removedSyncGroups`. Records whose `syncGroupKey` field matches the group are evicted. |
+| `syncGroupKey` | The property on this model that ties it to a sync group. When a group is deactivated, records whose `[syncGroupKey]` value equals the group ID are evicted. |
 | `maxResident` | FIFO watermark. When the pool exceeds this count after a new insert, oldest records are evicted down to `lowWaterRatio` (default 0.75). Evicted records stay in IDB for fast reload. |
 | `false` | Exempt a model from eviction entirely, even if a global `maxResident` is configured. |
 
@@ -168,6 +170,7 @@ export const schema = defineSchema({
     issue: entityFromZod(IssueRecord, {
       name: "Issue",
       loadStrategy: LoadStrategy.Eager,
+      eviction: { syncGroupKey: "teamId", maxResident: 5000 },
       fields: {
         teamId: s.refId("team").nullable().indexed(),
       },

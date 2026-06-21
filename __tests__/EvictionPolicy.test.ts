@@ -15,7 +15,6 @@ import {
   afterEach,
   vi,
 } from "vitest";
-import { makeStoreManager } from "./helpers/storeManager";
 import { StoreManager } from "@zerodrift/StoreManager";
 import { MemoryAdapter } from "@zerodrift/MemoryAdapter";
 import { BaseModel } from "@zerodrift/BaseModel";
@@ -23,11 +22,7 @@ import { ClientModel, Property } from "@zerodrift/decorators";
 import { LoadStrategy } from "@zerodrift/types";
 import { ModelRegistry } from "@zerodrift/ModelRegistry";
 import { addToPool } from "./fixtures";
-import {
-  controllableSSEClient,
-  makeFactory,
-  sendMessage,
-} from "./helpers/sseClient";
+import { controllableSSEClient } from "./helpers/sseClient";
 
 // ── Test-only model fixtures ────────────────────────────────────────────────
 //
@@ -388,7 +383,7 @@ describe("sync-group-leave auto-evict", () => {
   });
 
   it("server-pushed removal defaults keepInDb: false", async () => {
-    const sseClient = controllableSSEClient();
+    const _sseClient = controllableSSEClient();
     sm = await makeManager({
       initialGroups: ["team-1"],
       syncUrl: "http://test/events",

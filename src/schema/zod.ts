@@ -235,7 +235,7 @@ type MergedFieldsFromZodObject<
  * top-level knob (like `external`) has to be added here intentionally. */
 type EntityFromZodOptsBase = Pick<
   EntityDef,
-  "loadStrategy" | "usedForPartialIndexes" | "name" | "version"
+  "loadStrategy" | "eviction" | "usedForPartialIndexes" | "name" | "version"
 >;
 
 export interface EntityFromZodOpts<Z extends z.ZodObject = z.ZodObject>
@@ -335,6 +335,7 @@ export function entityFromZod<
   }
   return entity({
     loadStrategy: opts.loadStrategy,
+    eviction: opts.eviction,
     usedForPartialIndexes: opts.usedForPartialIndexes,
     name: opts.name,
     version: opts.version,
@@ -375,7 +376,7 @@ export function entitiesFromZod<
   const AI extends string | undefined = undefined,
 >(
   zods: Zods,
-  opts: Pick<EntityFromZodOptsBase, "loadStrategy" | "usedForPartialIndexes"> & {
+  opts: Pick<EntityFromZodOptsBase, "loadStrategy" | "eviction" | "usedForPartialIndexes"> & {
     autoIndex?: AI;
     omit?: Om;
   },
@@ -384,6 +385,7 @@ export function entitiesFromZod<
   for (const [key, zod] of Object.entries(zods)) {
     out[key] = entityFromZod(zod, {
       loadStrategy: opts.loadStrategy,
+      eviction: opts.eviction,
       usedForPartialIndexes: opts.usedForPartialIndexes,
       autoIndex: opts.autoIndex,
       omit: opts.omit as readonly never[] | undefined,

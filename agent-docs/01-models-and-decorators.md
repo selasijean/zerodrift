@@ -56,7 +56,7 @@ Available strategies: `Eager` (the default — in bootstrap, fully resident), `L
 
 `usedForPartialIndexes: true` means other models can use this model's ID fields as index keys in IndexedDB (used by `RefCollection` queries).
 
-`eviction` controls the declarative eviction policy. Set `false` to exempt a model from eviction entirely. Set `{ syncGroupKey: "teamId" }` to auto-evict records when the matching sync group is deactivated. Set `{ maxResident: 500 }` to cap the pool size with FIFO watermark eviction. Both options can be combined. See `02-object-pool.md` and `04-lazy-loading.md` for details.
+`eviction` controls the declarative eviction policy. Set `false` to exempt a model from eviction entirely. Set `{ syncGroupKey: "teamId" }` to auto-evict records when a sync group is deactivated — `syncGroupKey` names the property whose value is compared against the deactivated group ID (e.g., records where `record.teamId === groupId` are evicted). Set `{ maxResident: 500 }` to cap the pool size with FIFO watermark eviction. Both options can be combined. See `02-object-pool.md` and `04-lazy-loading.md` for details.
 
 #### Abstract base classes
 
