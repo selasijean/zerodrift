@@ -720,6 +720,13 @@ export class StoreManager<TContext = unknown> {
       // is non-fatal — the cache stays empty and we re-fetch on demand.
       try {
         for (const entry of await this.database.loadPartialIndexes()) {
+          // Ephemeral coverage is never persisted by current code; skip any
+          // stale entry an older build may have left behind, since the pool
+          // comes back empty and the marker would falsely claim completeness.
+          const entryMeta = ModelRegistry.getModelMeta(entry.modelName);
+          if (entryMeta?.loadStrategy === LoadStrategy.Ephemeral) {
+            continue;
+          }
           this.partialIndexCoverage.set(
             StoreManager.collectionKey(
               entry.modelName,
@@ -2267,6 +2274,15 @@ export class StoreManager<TContext = unknown> {
     if (indexKey === ALL_INDEX_KEY_SENTINEL) {
       this.fullyLoadedModels.add(modelName);
     }
+    // Ephemeral data lives only in the pool and never reaches IDB, so a
+    // persisted coverage marker would resurrect on the next bootstrap
+    // (loadPartialIndexes) while the pool comes back empty — `getOrLoadCollection`
+    // would then trust it, skip the fetch, and return nothing. Keep ephemeral
+    // coverage in-memory only: session-scoped, like the data it describes.
+    const meta = ModelRegistry.getModelMeta(modelName);
+    if (meta?.loadStrategy === LoadStrategy.Ephemeral) {
+      return;
+    }
     await this.database.recordPartialIndex(
       modelName,
       indexKey,
@@ -2290,7 +2306,15 @@ export class StoreManager<TContext = unknown> {
     bag: Record<string, unknown>[],
   ): Promise<void> {
     const meta = ModelRegistry.getModelMeta(compound.modelName);
-    if (meta?.loadStrategy !== LoadStrategy.Ephemeral && bag.length > 0) {
+    if (meta?.loadStrategy === LoadStrategy.Ephemeral) {
+      // Ephemeral models don't persist the bag to IDB, and only the original
+      // waiters' slices are hydrated into the pool. Recording compound coverage
+      // would make `isCoveredByCompound` short-circuit direct loads for scopes
+      // that were never materialized — returning empty. Skip it so those loads
+      // re-fetch from the server. (The waiters already got their slices.)
+      return;
+    }
+    if (bag.length > 0) {
       await this.database.writeModels(compound.modelName, bag);
     }
     await this.markPartialIndexLoaded(
@@ -3025,7 +3049,15 @@ export class StoreManager<TContext = unknown> {
       }
     }
 
-    await this.markPartialIndexLoaded(modelName, indexKey, value);
+    // Same cacheability guard as getOrLoadCollection: an Ephemeral scope larger
+    // than maxResident loses rows to the watermark during hydration, and there
+    // is no IDB to back them — don't record coverage the pool can't honor.
+    const cacheable =
+      !isEphemeral ||
+      results.every((r) => this.objectPool.getById(modelName, r.id) != null);
+    if (cacheable) {
+      await this.markPartialIndexLoaded(modelName, indexKey, value);
+    }
     return results;
   }
 

@@ -124,8 +124,9 @@ async function makeManager(opts: {
     value: string,
   ) => Promise<Record<string, unknown>[]>;
   bootstrap?: boolean;
+  adapter?: MemoryAdapter;
 } = {}) {
-  const adapter = new MemoryAdapter();
+  const adapter = opts.adapter ?? new MemoryAdapter();
   const bootstrapFetcher = vi.fn().mockResolvedValue({
     lastSyncId: 0,
     subscribedSyncGroups: opts.initialGroups ?? [],
@@ -730,6 +731,93 @@ describe("safe eviction keeps IDB in sync with the pool", () => {
     // The next load re-fetches rather than returning a truncated pool view.
     await sm.getOrLoadCollection("EphemeralColl", "teamId", "team-1");
     expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Ephemeral coverage is session-scoped: never persisted, never resurrected.
+// Ephemeral data lives only in the pool, so a persisted coverage marker would
+// claim a now-empty collection complete after a reload.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("Ephemeral coverage is session-scoped", () => {
+  it("does not persist coverage for Ephemeral collections", async () => {
+    const fetcher = vi.fn().mockResolvedValue([
+      { id: "e1", label: "A", teamId: "team-1" },
+    ]);
+    sm = await makeManager({ initialGroups: ["team-1"], onDemandFetcher: fetcher });
+
+    await sm.getOrLoadCollection("EphemeralColl", "teamId", "team-1");
+
+    // In-memory coverage is set for the session…
+    expect(sm.isCollectionLoaded("EphemeralColl", "teamId", "team-1")).toBe(true);
+    // …but it must not reach the persistent store.
+    const persisted = await sm.database.loadPartialIndexes();
+    expect(persisted.some((e) => e.modelName === "EphemeralColl")).toBe(false);
+  });
+
+  it("persists coverage for non-Ephemeral collections (contrast)", async () => {
+    const fetcher = vi.fn().mockResolvedValue([
+      { id: "i1", title: "A", teamId: "team-1" },
+    ]);
+    sm = await makeManager({ initialGroups: ["team-1"], onDemandFetcher: fetcher });
+
+    await sm.getOrLoadCollection("EvictableIssue", "teamId", "team-1");
+
+    const persisted = await sm.database.loadPartialIndexes();
+    expect(persisted.some((e) => e.modelName === "EvictableIssue")).toBe(true);
+  });
+
+  it("ignores a stale persisted Ephemeral entry on reload", async () => {
+    const adapter = new MemoryAdapter();
+
+    // Simulate a marker left by an older build that wrongly persisted it.
+    const seed = await makeManager({ initialGroups: ["team-1"], adapter });
+    await seed.database.recordPartialIndex("EphemeralColl", "teamId", "team-1", 0);
+    await seed.teardown();
+
+    // A fresh manager over the same adapter must not resurrect that coverage —
+    // the ephemeral pool comes back empty, so the marker would lie.
+    const fetcher = vi.fn().mockResolvedValue([
+      { id: "e1", label: "A", teamId: "team-1" },
+    ]);
+    sm = await makeManager({
+      initialGroups: ["team-1"],
+      adapter,
+      bootstrap: true,
+      onDemandFetcher: fetcher,
+    });
+
+    expect(sm.isCollectionLoaded("EphemeralColl", "teamId", "team-1")).toBe(false);
+    await sm.getOrLoadCollection("EphemeralColl", "teamId", "team-1");
+    expect(fetcher).toHaveBeenCalled();
+  });
+
+  it("refreshCollection does not cache an oversized Ephemeral scope", async () => {
+    const fetcher = vi.fn().mockResolvedValue([
+      { id: "e1", label: "A", teamId: "team-1" },
+      { id: "e2", label: "B", teamId: "team-1" },
+      { id: "e3", label: "C", teamId: "team-1" },
+      { id: "e4", label: "D", teamId: "team-1" },
+    ]);
+    sm = await makeManager({
+      initialGroups: ["team-1"],
+      onDemandFetcher: fetcher,
+      eviction: { maxResident: 3 },
+    });
+
+    const refreshed = await sm.refreshCollection<EphemeralColl>(
+      "EphemeralColl",
+      "teamId",
+      "team-1",
+    );
+
+    expect(refreshed.length).toBe(4);
+    expect(
+      sm.objectPool.getAll<EphemeralColl>("EphemeralColl").length,
+    ).toBeLessThan(4);
+    // Watermark truncated the pool and there's no IDB — coverage must stay off.
+    expect(sm.isCollectionLoaded("EphemeralColl", "teamId", "team-1")).toBe(false);
   });
 });
 
