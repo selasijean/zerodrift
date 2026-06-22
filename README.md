@@ -108,7 +108,7 @@ export class Comment extends BaseModel {
 }
 ```
 
-When the pool exceeds `maxResident` after a new insert, the oldest records are evicted down to `lowWaterRatio` (default 0.75). Evicted records stay in IDB for fast reload. Set `eviction: false` to exempt a model entirely.
+When the pool exceeds `maxResident` after a new insert, the oldest records are evicted down to `lowWaterRatio` (default 0.75). For persisted models (`Lazy` / `Partial`) the evicted rows stay in IDB for fast reload. `Ephemeral` models are pool-only with no IDB backing, so eviction drops the only copy and a reload has to come from the server via your on-demand fetcher (their collection coverage is session-scoped and never persisted). Set `eviction: false` to exempt a model entirely.
 
 Global defaults in `StoreManagerConfig.eviction`:
 
@@ -149,7 +149,7 @@ Pass `{ safe: true }` to skip records that are observed, dirty, or in-flight. Pa
 - belongs to a model with `LoadStrategy.LocalOnly` or `eviction: false`
 - **just triggered the check** — inserting a record never evicts that same record, so a fresh optimistic create can't be dropped before its transaction lands
 
-**Self-heal (watermark only).** Watermark eviction is involuntary, so it's reversible: evicted records are marked, and if a `@Reference` getter or a mounted React hook still needs one, the engine reloads it from IDB in the background and it reappears on the next render. Explicit `evictByIndex` / `evictWhere` are deliberate removals — they do **not** self-heal, which is what makes sync-group cleanup actually clear the data instead of reloading it.
+**Self-heal (watermark only).** Watermark eviction is involuntary, so it's reversible: evicted records are marked, and if a `@Reference` getter or a mounted React hook still needs one, the engine reloads it in the background and it reappears on the next render. The reload comes from IDB for persisted models; for `Ephemeral` models (no IDB) it goes to the server through your on-demand fetcher, so an `Ephemeral` record only self-heals when on-demand fetching is configured. Explicit `evictByIndex` / `evictWhere` are deliberate removals — they do **not** self-heal, which is what makes sync-group cleanup actually clear the data instead of reloading it.
 
 ## Schema-first with Zod
 
