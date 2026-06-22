@@ -108,7 +108,7 @@ export class Comment extends BaseModel {
 }
 ```
 
-When the pool exceeds `maxResident` after a new insert, the oldest records are evicted down to `lowWaterRatio` (default 0.75). For persisted models (`Lazy` / `Partial`) the evicted rows stay in IDB for fast reload. `Ephemeral` models are pool-only with no IDB backing, so eviction drops the only copy and a reload has to come from the server via your on-demand fetcher (their collection coverage is session-scoped and never persisted). Set `eviction: false` to exempt a model entirely.
+When the pool exceeds `maxResident` after a new insert, the oldest records are evicted down to `lowWaterRatio` (default 0.75). For persisted models (`Lazy` / `Partial`, plus `Eager` models that explicitly opt into eviction) the evicted rows stay in IDB for fast reload. `Ephemeral` models are pool-only with no IDB backing, so eviction drops the only copy and a reload has to come from the server via your on-demand fetcher (their collection coverage is session-scoped and never persisted). Set `eviction: false` to exempt a model entirely.
 
 Global defaults in `StoreManagerConfig.eviction`:
 
