@@ -119,6 +119,15 @@ export class ObjectPool {
 
   private recentlyEvicted = new Set<string>();
 
+  /**
+   * Composite key for the per-(model, id) maps. `modelAtoms` and
+   * `recentlyEvicted` are keyed identically and cross-checked in `trackModel`,
+   * so they must agree — change the format here only.
+   */
+  private static idKey(modelName: string, id: string): string {
+    return `${modelName}:${id}`;
+  }
+
   private rehydrator: ((modelName: string, id: string) => void) | null = null;
   private afterPutCallback:
     | ((modelName: string, justInsertedId: string) => void)
@@ -135,7 +144,7 @@ export class ObjectPool {
   }
 
   evictInstance(modelName: string, id: string): void {
-    this.recentlyEvicted.add(`${modelName}:${id}`);
+    this.recentlyEvicted.add(ObjectPool.idKey(modelName, id));
     this.remove(modelName, id);
   }
 
@@ -146,7 +155,7 @@ export class ObjectPool {
     const bucket = this.pool.get(modelName);
     runInAction(() => {
       for (const id of ids) {
-        this.recentlyEvicted.add(`${modelName}:${id}`);
+        this.recentlyEvicted.add(ObjectPool.idKey(modelName, id));
         const instance = bucket?.get(id);
         if (instance != null) {
           this.detachInverseLinks(modelName, instance);
@@ -162,11 +171,11 @@ export class ObjectPool {
   }
 
   wasEvicted(modelName: string, id: string): boolean {
-    return this.recentlyEvicted.has(`${modelName}:${id}`);
+    return this.recentlyEvicted.has(ObjectPool.idKey(modelName, id));
   }
 
   clearEvicted(modelName: string, id: string): void {
-    this.recentlyEvicted.delete(`${modelName}:${id}`);
+    this.recentlyEvicted.delete(ObjectPool.idKey(modelName, id));
   }
 
   /**
@@ -179,7 +188,7 @@ export class ObjectPool {
    * schedule a background rehydration from IDB/server.
    */
   trackModel(modelName: string, id: string): void {
-    const key = `${modelName}:${id}`;
+    const key = ObjectPool.idKey(modelName, id);
     let atom = this.modelAtoms.get(key);
     const wasJustCreated = atom == null;
     if (atom == null) {
@@ -206,7 +215,7 @@ export class ObjectPool {
 
   /** Bump the atom for `(modelName, id)` if any observer is currently tracking it. */
   private notifyModelChanged(modelName: string, id: string): void {
-    this.modelAtoms.get(`${modelName}:${id}`)?.reportChanged();
+    this.modelAtoms.get(ObjectPool.idKey(modelName, id))?.reportChanged();
   }
 
   /**
@@ -281,7 +290,7 @@ export class ObjectPool {
     this.snapshotCache.delete(modelName);
 
     if (this.recentlyEvicted.size > 0) {
-      this.recentlyEvicted.delete(`${modelName}:${instance.id}`);
+      this.recentlyEvicted.delete(ObjectPool.idKey(modelName, instance.id));
     }
 
     // First-time entry: wire inverse links and bump the per-id atom. Re-puts
@@ -363,7 +372,7 @@ export class ObjectPool {
       const existing = this.getById(modelName, id);
       if (existing != null) {
         if (this.recentlyEvicted.size > 0) {
-          this.recentlyEvicted.delete(`${modelName}:${id}`);
+          this.recentlyEvicted.delete(ObjectPool.idKey(modelName, id));
         }
         existing.hydrate(data);
         return existing;

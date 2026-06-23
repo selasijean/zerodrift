@@ -185,7 +185,7 @@ export function ClientModel(
     if (opts.schemaVersion != null) {
       meta.schemaVersion = opts.schemaVersion;
     }
-    if (opts.eviction !== undefined) {
+    if (opts.eviction != null) {
       meta.eviction = opts.eviction;
     }
     // Drain decorator-stashed metadata for this class and every ancestor up
