@@ -2485,39 +2485,92 @@ export class StoreManager<TContext = unknown> {
     if (meta?.loadStrategy !== LoadStrategy.Ephemeral) {
       return;
     }
-    let clearedAllScope = false;
-    for (const [key, entry] of [...this.partialIndexCoverage]) {
+    // Ephemeral coverage is in-memory only (never persisted), so dropping the
+    // hot-cache entries is enough — no IDB partial-index to clear.
+    this.dropCoverageEntries(
+      modelName,
+      this.affectedScopes(
+        modelName,
+        evicted as unknown as Record<string, unknown>[],
+      ),
+    );
+  }
+
+  /**
+   * After deleting rows for an arbitrary predicate (`evictWhere`), drop any
+   * partial-index coverage whose scope one of the deleted rows belonged to —
+   * in-memory AND persisted — so a later `getOrLoadCollection` for that scope
+   * re-fetches from the server instead of trusting a now-incomplete IDB.
+   * `evictByIndex` clears its single targeted scope inline; this generalizes
+   * that to the arbitrary-predicate case. No-op when no scope is affected.
+   */
+  private async invalidateCoverageForDeleted(
+    modelName: string,
+    deleted: Array<Record<string, unknown>>,
+  ): Promise<void> {
+    const affected = this.affectedScopes(modelName, deleted);
+    if (affected.length === 0) {
+      return;
+    }
+    this.dropCoverageEntries(modelName, affected);
+    for (const entry of affected) {
+      await this.database.clearPartialIndex(
+        entry.modelName,
+        entry.indexKey,
+        entry.value,
+      );
+    }
+  }
+
+  /** Coverage scopes for `modelName` that any of `records` belongs to. The
+   * `*` (whole-model) scope is always affected once any record is removed. */
+  private affectedScopes(
+    modelName: string,
+    records: Array<Record<string, unknown>>,
+  ): PartialIndexEntry[] {
+    const out: PartialIndexEntry[] = [];
+    for (const entry of this.partialIndexCoverage.values()) {
       if (entry.modelName !== modelName) {
         continue;
       }
-      const affected =
+      if (
         entry.indexKey === ALL_INDEX_KEY_SENTINEL ||
-        evicted.some((r) => prop(r, entry.indexKey) === entry.value);
-      if (!affected) {
-        continue;
+        records.some((r) => r[entry.indexKey] === entry.value)
+      ) {
+        out.push(entry);
       }
-      this.partialIndexCoverage.delete(key);
+    }
+    return out;
+  }
+
+  /** Drop the in-memory coverage entries and keep the `*`-coverage mirror
+   * (`fullyLoadedModels`) consistent — flip it off only when no other `*`
+   * scope for the model survives. */
+  private dropCoverageEntries(
+    modelName: string,
+    entries: PartialIndexEntry[],
+  ): void {
+    let clearedAllScope = false;
+    for (const entry of entries) {
+      this.partialIndexCoverage.delete(
+        StoreManager.collectionKey(entry.modelName, entry.indexKey, entry.value),
+      );
       if (entry.indexKey === ALL_INDEX_KEY_SENTINEL) {
         clearedAllScope = true;
       }
     }
-    if (clearedAllScope) {
-      // Keep the `*`-coverage mirror consistent: flip it off only when no
-      // other `*` scope for this model survives.
-      let stillCovered = false;
-      for (const entry of this.partialIndexCoverage.values()) {
-        if (
-          entry.modelName === modelName &&
-          entry.indexKey === ALL_INDEX_KEY_SENTINEL
-        ) {
-          stillCovered = true;
-          break;
-        }
-      }
-      if (!stillCovered) {
-        this.fullyLoadedModels.delete(modelName);
+    if (!clearedAllScope) {
+      return;
+    }
+    for (const entry of this.partialIndexCoverage.values()) {
+      if (
+        entry.modelName === modelName &&
+        entry.indexKey === ALL_INDEX_KEY_SENTINEL
+      ) {
+        return;
       }
     }
+    this.fullyLoadedModels.delete(modelName);
   }
 
   private evictFromPool(
@@ -2548,6 +2601,11 @@ export class StoreManager<TContext = unknown> {
    * IDB side is a full cursor scan — prefer `evictByIndex` when the match is
    * "indexed column equals value". Pass `{ keepInDb: true }` to release only
    * the pool and leave the IDB rows cached. Returns the number of rows dropped.
+   *
+   * Coverage for any partial-index scope the deleted rows belonged to is
+   * invalidated (in-memory and persisted), so a later `getOrLoadCollection`
+   * for that scope re-fetches from the server instead of trusting a now-
+   * incomplete IDB. (Skipped under `keepInDb`, where the rows stay cached.)
    */
   async evictWhere(
     modelName: string,
@@ -2559,15 +2617,17 @@ export class StoreManager<TContext = unknown> {
       return poolCount;
     }
     const records = await this.database.readAllModels(modelName);
-    let ids = records.filter(predicate).map((r) => r.id as string);
+    let toDelete = records.filter(predicate);
     if (opts.safe === true) {
       // Don't delete the IDB backing of a record the pool pass skipped
       // (observed / dirty / in-flight) — that would orphan a live instance
       // with no persisted row to reload from.
-      ids = ids.filter((id) => this.canEvict(modelName, id).safe);
+      toDelete = toDelete.filter((r) => this.canEvict(modelName, r.id as string).safe);
     }
+    const ids = toDelete.map((r) => r.id as string);
     if (ids.length > 0) {
       await this.database.deleteModels(modelName, ids);
+      await this.invalidateCoverageForDeleted(modelName, toDelete);
     }
     return poolCount + ids.length;
   }

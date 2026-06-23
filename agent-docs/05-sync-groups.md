@@ -91,7 +91,7 @@ After this, the client has a complete local copy of the new group's data, and fu
 ### When groups are removed
 
 1. Remove from `meta.subscribedSyncGroups`
-2. The `onSyncGroupDelete` callback fires with the group ID and `StoreManager`. Use `sm.evictByIndex` or `sm.evictWhere` to drop records belonging to that group. Pass `{ safe: true }` to respect the safety predicate (skips observed, dirty, in-flight records).
+2. The `onSyncGroupDelete` callback fires with the group ID and `StoreManager`. Use `sm.evictByIndex(modelName, groupKey, groupId)` to drop the group's records (or `sm.evictWhere` when the match isn't a single indexed column). Both invalidate the affected collection coverage in-memory and on disk, so a later load re-fetches rather than trusting a now-incomplete IDB; `evictByIndex` uses the IDB index while `evictWhere` is a full-store scan, so prefer `evictByIndex` for the common `groupKey === groupId` case. Pass `{ safe: true }` to respect the safety predicate (skips observed, dirty, in-flight records).
 3. Components displaying those records see them disappear via normal reactivity (`useRecord` → `null`, lists shrink). Explicit `evictByIndex` / `evictWhere` are deliberate removals — they do **not** trigger the self-heal reload (that's reserved for involuntary watermark eviction), so the data stays gone until the user re-subscribes. On re-subscription the records reload through the normal load path, served from the retained IDB rows if `keepInDb` was set.
 
 Pass `{ keepInDb: true }` to `evictByIndex` to keep IDB rows for fast rehydration if the user re-subscribes. Omit it to purge both pool and IDB (appropriate for server-pushed removals where the user lost access).

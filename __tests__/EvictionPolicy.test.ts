@@ -572,6 +572,54 @@ describe("safe eviction keeps IDB in sync with the pool", () => {
     sm.objectPool.unobserveInstance("EvictableIssue", "i1");
   });
 
+  it("evictWhere invalidates coverage for affected scopes (in-memory + persisted)", async () => {
+    const fetcher = vi.fn().mockResolvedValue([
+      { id: "i1", title: "A", teamId: "team-1" },
+      { id: "i2", title: "B", teamId: "team-1" },
+    ]);
+    sm = await makeManager({ initialGroups: ["team-1"], onDemandFetcher: fetcher });
+
+    await sm.getOrLoadCollection("EvictableIssue", "teamId", "team-1");
+    expect(sm.isCollectionLoaded("EvictableIssue", "teamId", "team-1")).toBe(true);
+    expect(
+      (await sm.database.loadPartialIndexes()).some(
+        (e) => e.modelName === "EvictableIssue" && e.value === "team-1",
+      ),
+    ).toBe(true);
+
+    // Arbitrary-predicate eviction that purges the scope's IDB rows.
+    await sm.evictWhere("EvictableIssue", (m) => m.teamId === "team-1");
+
+    // Coverage must be invalidated in BOTH layers, or the next load trusts a
+    // stale marker and returns an incomplete collection.
+    expect(sm.isCollectionLoaded("EvictableIssue", "teamId", "team-1")).toBe(false);
+    expect(
+      (await sm.database.loadPartialIndexes()).some(
+        (e) => e.modelName === "EvictableIssue" && e.value === "team-1",
+      ),
+    ).toBe(false);
+
+    // Next load re-fetches instead of short-circuiting on stale coverage.
+    await sm.getOrLoadCollection("EvictableIssue", "teamId", "team-1");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("evictWhere { keepInDb } leaves coverage intact (rows stay cached)", async () => {
+    const fetcher = vi.fn().mockResolvedValue([
+      { id: "i1", title: "A", teamId: "team-1" },
+    ]);
+    sm = await makeManager({ initialGroups: ["team-1"], onDemandFetcher: fetcher });
+
+    await sm.getOrLoadCollection("EvictableIssue", "teamId", "team-1");
+
+    // Pool-only release keeps the IDB rows, so coverage stays valid.
+    await sm.evictWhere("EvictableIssue", (m) => m.teamId === "team-1", {
+      keepInDb: true,
+    });
+
+    expect(sm.isCollectionLoaded("EvictableIssue", "teamId", "team-1")).toBe(true);
+  });
+
   it("evictByIndex { safe } preserves collection coverage when nothing is evictable", async () => {
     const fetcher = vi.fn().mockResolvedValue([
       { id: "i1", title: "A", teamId: "team-1" },
