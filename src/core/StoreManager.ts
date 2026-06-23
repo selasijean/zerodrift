@@ -2643,6 +2643,12 @@ export class StoreManager<TContext = unknown> {
    * Pass `{ safe: true }` to skip records that are observed, dirty, or
    * in-flight; the IDB delete is filtered to match, and if nothing turns out
    * to be evictable the coverage entry is left intact (no forced refetch).
+   *
+   * Only the `(indexKey, value)` scope's coverage is invalidated. If the model
+   * also has `*` coverage (a `getOrLoadAll`) or coverage on another index that
+   * these rows belonged to, those scopes are left untouched — keeping the bulk
+   * indexed delete fast. Use `evictWhere` instead when a partial delete must
+   * invalidate every affected scope.
    */
   async evictByIndex(
     modelName: string,
