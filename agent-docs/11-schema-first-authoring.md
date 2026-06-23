@@ -67,6 +67,7 @@ Returns a plain `SchemaDef`. Pure data; no side effects until you pass it to `cr
 ```typescript
 entity({
   loadStrategy: LoadStrategy.Eager,
+  eviction: { maxResident: 500 },    // optional — per-model eviction policy
   usedForPartialIndexes: true,    // optional
   name: "Issue",                   // optional — defaults to PascalCase of the schema key
   version: 2,                      // optional — overrides the auto-computed schemaVersion hash

@@ -146,6 +146,16 @@ export class TransactionQueue {
     this.listeners.forEach((listener) => listener());
   }
 
+  hasInFlight(modelName: string, id: string): boolean {
+    const match = (tx: BaseTransaction) =>
+      tx.modelName === modelName && tx.modelId === id;
+    return (
+      this.pending.some(match) ||
+      this.executing.some(match) ||
+      this.awaitingSync.some(match)
+    );
+  }
+
   // ── Batch API ─────────────────────────────────────────────────────────────
 
   beginBatch(): string {

@@ -53,6 +53,7 @@ export function compileSchema(schema: SchemaDef): CompiledSchema {
 
     const meta = ModelRegistry.registerModel(name, ctor);
     meta.loadStrategy = entityDef.loadStrategy;
+    meta.eviction = entityDef.eviction;
     meta.usedForPartialIndexes = entityDef.usedForPartialIndexes ?? false;
     if (entityDef.version != null) {
       meta.schemaVersion = entityDef.version;

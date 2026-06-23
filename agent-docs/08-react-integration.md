@@ -172,6 +172,17 @@ Exposes the undo/redo stack. `canUndo` and `canRedo` are reactive — they updat
 <button onClick={redo} disabled={!canRedo}>Redo</button>
 ```
 
+## Observation Tracking for Eviction Safety
+
+The read hooks maintain per-instance observation refcounts on the pool, protecting rendered records from being evicted by the declarative eviction policy.
+
+- **`useRecord(handle, id)`** — calls `pool.observeInstance(modelName, id)` in its `useSyncExternalStore` subscribe callback. On cleanup (unmount or id change), calls `pool.unobserveInstance`. The `id != null` guard ensures null/undefined ids don't observe anything.
+- **`useRecords(handle, ids?)` and `useRecordsByIndex(handle, key, value)`** — use `useObserveItems`, which diffs the current snapshot IDs against the previous render's IDs in a `useEffect`. New IDs are observed, removed IDs are unobserved. On unmount, all current IDs are unobserved.
+
+Multiple components observing the same record increment the refcount — the record only becomes evictable when all observers unmount. `canEvict` checks `pool.isObserved(modelName, id)` before allowing eviction.
+
+**Self-heal.** `useRecordByName` has a `useEffect` that detects "prevItem was non-null, item is now null, id is non-null." It checks `pool.wasEvicted(modelName, id)` — if true (eviction, not server-side deletion), it calls `pool.clearEvicted` and fires `reload()` to restore the record from IDB or the server.
+
 ## Reactivity Model
 
 The reactivity chain for a component using `useRecords(Issue)`:

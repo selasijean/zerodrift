@@ -74,9 +74,19 @@ Insert, lookup, delete — all constant time regardless of how many instances ex
 The pool notifies at the model-type level, not per-instance. Every component subscribed to "Issue" re-checks its snapshot when **any** issue changes. For large collections with many subscribers, this can cause unnecessary snapshot comparison work. (React's `useSyncExternalStore` handles this — it only re-renders if the snapshot actually changed — but the comparison still runs.)
 
 ### Memory is unbounded by default
-For models with `LoadStrategy.Eager`, **every instance is loaded into the pool at bootstrap** and stays there. If an Issue is deleted, it's removed. But there's no eviction — instances don't expire. If you have 50,000 issues across 100 teams, and a user is only ever on one team, all 50,000 still live in the pool.
+For models with `LoadStrategy.Eager`, **every instance is loaded into the pool at bootstrap** and stays there unless explicitly opted into eviction. If you have 50,000 issues across 100 teams, and a user is only ever on one team, all 50,000 still live in the pool.
 
-This is mitigated by `LoadStrategy.Lazy` and `LoadStrategy.Partial`, but for Eager models, you pay the full cost upfront.
+This is mitigated by `LoadStrategy.Lazy` and `LoadStrategy.Partial`, and by the eviction system — models can declare `eviction: { maxResident }` to cap pool size, and the `onSyncGroupDelete` callback lets you evict by index when a sync group is deactivated. See the eviction section below.
+
+### Eviction
+
+The pool supports declarative eviction via `ObjectPool.evictBatch` and `ObjectPool.evictInstance`. Evicted records are removed from the pool and marked in a transient `recentlyEvicted` set so the self-heal path can distinguish eviction from server-side deletion.
+
+**Observation tracking.** React hooks (`useRecord`, `useRecords`, `useRecordsByIndex`) maintain per-instance refcounts via `observeInstance` / `unobserveInstance`. The eviction safety predicate (`StoreManager.canEvict`) checks `pool.isObserved(modelName, id)` and refuses to evict records that a mounted component is rendering.
+
+**Self-heal.** When a `@Reference` getter accesses an evicted target, `trackModel` sees the eviction marker and fires the rehydrator callback (`getOrLoadById`), which restores the record from IDB or the server in the background. The React hook self-heal works similarly: `useRecordByName` detects "had data, lost it to eviction" via `wasEvicted` and calls `reload()`.
+
+**Stale marker cleanup.** When a record re-enters the pool via `put` or `hydrateAndPut`, any stale eviction marker is cleared automatically (guarded by `recentlyEvicted.size > 0` so it's zero-cost during bootstrap).
 
 ### No query language
 The pool is just a flat Map per model type. There are no indexes, no filtering, no sorting built into the pool itself. If you want all Issues with `priority > 2`, you call `pool.getAll("Issue").filter(...)`. For large datasets, this is a linear scan. IndexedDB indexes exist for efficient bootstrap loading, but in-memory querying is always O(n).

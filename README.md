@@ -19,7 +19,7 @@ The design is inspired by Linear's sync engine; see [Acknowledgments](#acknowled
 - **Optimistic writes with real recovery**: local changes update immediately, batch into transaction POSTs, persist through reloads, and reconcile when matching server deltas arrive.
 - **Relationships that stay live**: references, inverse collections, owned collections, and indexed lookups update as records hydrate, load lazily, or arrive over SSE.
 - **Schema or class models**: use decorators (`@ClientModel`, `@Property`, `@Reference`) or schema-as-data (`defineSchema(...)`, `entityFromZod(...)`) without `reflect-metadata`.
-- **Memory you can shape**: choose per-model `LoadStrategy` values for eager data, lazy tables, partial index-backed loading, local-only records, or ephemeral SSE-fed state.
+- **Memory you can shape**: choose per-model `LoadStrategy` values for eager data, lazy tables, partial index-backed loading, local-only records, or ephemeral SSE-fed state. Declarative eviction policies cap pool size and auto-evict when sync groups change.
 - **Undo/redo built into the transaction layer**: track field-level changes, group atomic multi-model edits, and include custom remote actions in the same undo stack.
 - **React, browser, or headless Node**: use `<SyncProvider>` and typed hooks in React, or run `StoreManager` directly in agents, workers, CLIs, and tests.
 - **Your backend, your stack**: implement three HTTP endpoints in any language, with a reference Go backend and Next.js demo included.
@@ -88,6 +88,69 @@ export class Issue extends BaseModel {
 
 See [agent-docs/01-models-and-decorators.md](agent-docs/01-models-and-decorators.md) for the full decorator reference.
 
+## Eviction
+
+By default, records stay in memory for the session. Eviction lets you bound the pool and clean up stale data.
+
+### Watermark (automatic)
+
+Cap a model's pool size with FIFO eviction:
+
+```ts
+@ClientModel({
+  name: "Comment",
+  loadStrategy: LoadStrategy.Partial,
+  eviction: { maxResident: 500 },
+})
+export class Comment extends BaseModel {
+  @Property({ indexed: true }) public teamId = "";
+  @Property() public body = "";
+}
+```
+
+When the pool exceeds `maxResident` after a new insert, the oldest records are evicted down to `lowWaterRatio` (default 0.75). For persisted models (`Lazy` / `Partial`, plus `Eager` models that explicitly opt into eviction) the evicted rows stay in IDB for fast reload. `Ephemeral` models are pool-only with no IDB backing, so eviction drops the only copy and a reload has to come from the server via your on-demand fetcher (their collection coverage is session-scoped and never persisted). Set `eviction: false` to exempt a model entirely.
+
+Global defaults in `StoreManagerConfig.eviction`:
+
+```ts
+new StoreManager({
+  // ...
+  eviction: {
+    maxResident: 1000,        // cap for eviction-eligible models
+    lowWaterRatio: 0.75,      // evict down to 75% of maxResident
+  },
+});
+```
+
+The global cap applies to **eviction-eligible** models — `Lazy`, `Partial`, and `Ephemeral`. `Eager` and `LocalOnly` models are exempt by default (`Eager` means "always resident"). To subject an `Eager` model to eviction, give it an explicit config: `eviction: {}` accepts the global cap, `eviction: { maxResident: N }` sets a per-model one. A per-model `maxResident` always wins over the global value.
+
+### Sync-group cleanup (explicit)
+
+When a sync group is deactivated, the `onSyncGroupDelete` callback fires. Use `evictByIndex` to drop the group's records:
+
+```ts
+new StoreManager({
+  // ...
+  hooks: {
+    onSyncGroupDelete: async (groupId, sm) => {
+      await sm.evictByIndex("Comment", "teamId", groupId, { keepInDb: true });
+      await sm.evictByIndex("Issue", "teamId", groupId, { keepInDb: true });
+    },
+  },
+});
+```
+
+Pass `{ safe: true }` to skip records that are observed, dirty, or in-flight. Pass `{ keepInDb: true }` to keep IDB rows for fast rehydration on re-subscribe.
+
+**Safety guarantees.** The watermark eviction loop never evicts a record that:
+- has **unsaved changes** (dirty fields not yet committed)
+- has an **in-flight transaction** (sent to server, awaiting confirmation)
+- is **observed by a mounted React hook** (`useRecord`, `useRecords`, `useRecordsByIndex`)
+- belongs to a model with `LoadStrategy.LocalOnly` or `eviction: false`
+- **just triggered the check** — inserting a record never evicts that same record, so a fresh optimistic create can't be dropped before its transaction lands
+
+**Self-heal (watermark only).** Watermark eviction is involuntary, so it's reversible: evicted records are marked, and if a `@Reference` getter or a mounted React hook still needs one, the engine reloads it in the background and it reappears on the next render. The reload comes from IDB for persisted models; for `Ephemeral` models (no IDB) it goes to the server through your on-demand fetcher, so an `Ephemeral` record only self-heals when on-demand fetching is configured. Explicit `evictByIndex` / `evictWhere` are deliberate removals — they do **not** self-heal, which is what makes sync-group cleanup actually clear the data instead of reloading it.
+
 ## Schema-first with Zod
 
 If your record shapes already live in Zod, use `entityFromZod(...)` as the schema authoring path. Zod owns the field types; `fields` overrides add zerodrift metadata such as foreign keys and indexes.
@@ -124,6 +187,7 @@ export const schema = defineSchema({
     issue: entityFromZod(IssueRecord, {
       name: "Issue",
       loadStrategy: LoadStrategy.Eager,
+      eviction: { maxResident: 5000 },
       fields: {
         teamId: s.refId("team").nullable().indexed(),
       },

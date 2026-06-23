@@ -157,11 +157,14 @@ When user opens Issue X's document:
 
 The heap grows proportionally to what's been viewed, not the total workspace size.
 
-### The Trade-off
+### Eviction keeps the heap bounded
 
-The heap never shrinks. There's no eviction — once a Comment is loaded into the pool, it stays there for the session. If the user browses through 50 teams over an hour, all their comments accumulate. This is acceptable for most sessions but can become significant for very long-lived sessions on large workspaces.
+By default, once a record is loaded into the pool it stays there for the session. For long-lived sessions on large workspaces, this can accumulate. The eviction system addresses this:
 
-This is a deliberate trade-off: eviction requires cache invalidation logic (what if a comment in the pool gets stale?), and the complexity cost was deemed higher than the memory cost for typical usage patterns.
+- **Watermark (automatic).** Models that declare `eviction: { maxResident: N }` (or a global `eviction.maxResident` in `StoreManagerConfig`) are evicted FIFO down to `lowWaterRatio` (default 0.75) whenever the pool count exceeds the cap. Watermark always uses `keepInDb: true`, so for persisted models (`Lazy` / `Partial`, plus `Eager` models that explicitly opt into eviction) the rows stay in IDB and rehydrate cheaply. `Ephemeral` models have no IDB, so `keepInDb` is moot: eviction drops the only copy, their collection coverage is session-scoped (never persisted, and a stale entry from an older build is ignored on reload), and a reload must come from the server via the on-demand fetcher. The global cap covers eviction-eligible models (`Lazy` / `Partial` / `Ephemeral`); `Eager` and `LocalOnly` are exempt by default, since `Eager` means "always resident". An `Eager` model opts in with its own `eviction` config — `eviction: {}` accepts the global cap, `eviction: { maxResident: N }` sets a per-model one.
+- **Sync-group-leave (explicit).** The `onSyncGroupDelete` callback fires when `deactivateSyncGroup` or a server-pushed `removedSyncGroups` removes a group. Use `sm.evictByIndex(modelName, indexKey, groupId)` to drop the group's records. Pass `{ safe: true }` to respect the safety predicate.
+
+The safety predicate (`canEvict`) refuses to evict records with unsaved changes, in-flight transactions, or active observation refcounts (records being rendered by React hooks). Watermark eviction always applies it; explicit `evictByIndex` applies it only with `{ safe: true }`. Watermark-evicted records are also marked so the self-heal path can reload them when a `@Reference` getter or React hook accesses them — from IDB for persisted models, or from the server via the on-demand fetcher for `Ephemeral` models (so an `Ephemeral` record only self-heals when on-demand fetching is configured). Explicit eviction is a deliberate removal and does not self-heal. See `02-object-pool.md` for the self-heal mechanism.
 
 ## Eager vs lazy — pick the decorator
 

@@ -106,7 +106,19 @@ export interface EvictOptions {
    * load refetches from the server.
    */
   keepInDb?: boolean;
+  /**
+   * Check `canEvict` for each record before evicting. When true, records with
+   * unsaved changes, in-flight transactions, or active observation refcounts
+   * are skipped. Default false — explicit evict calls are unconditional.
+   */
+  safe?: boolean;
 }
+
+export type EvictBlockReason =
+  | "unsavedChanges"
+  | "inFlight"
+  | "observed"
+  | "strategyExempt";
 
 export interface BootstrapResponse {
   lastSyncId: number;
@@ -342,6 +354,11 @@ export interface AdvancedConfig<TContext = unknown> {
   undoableActions?: UndoableActionHandlers;
 }
 
+export interface EvictionConfig {
+  maxResident?: number;
+  lowWaterRatio?: number;
+}
+
 /**
  * Public engine config, grouped by concern. `transport` is required
  * (carries the required `bootstrapFetcher`); the rest are optional.
@@ -353,6 +370,7 @@ export interface StoreManagerConfig<TContext = unknown> {
   persistence?: PersistenceConfig;
   hooks?: HooksConfig<TContext>;
   advanced?: AdvancedConfig<TContext>;
+  eviction?: EvictionConfig;
 }
 
 /**
@@ -380,6 +398,7 @@ export type NormalizedConfig<TContext = unknown> = Omit<
   onDemandIndexBatchFetcher?: IndexBatchFetcher;
   serverSupportsCompoundIndexKeys?: boolean;
   compoundIndexFetchThreshold?: number;
+  eviction?: EvictionConfig;
 };
 
 /** @internal Grouped public config → flat internal config. Single mapping
@@ -420,6 +439,7 @@ export function normalizeConfig<TContext = unknown>(
     routeCommit: c.advanced?.routeCommit,
     onModelTouched: c.advanced?.onModelTouched,
     undoableActions: c.advanced?.undoableActions,
+    eviction: c.eviction,
   };
 }
 
@@ -559,6 +579,16 @@ export class StoreManager<TContext = unknown> {
     }
     this.hasModelTouchedHandler = c.onModelTouched != null;
     BaseModel.storeManager = this; // wire auto-commit
+
+    this.objectPool.setRehydrator((modelName, id) => {
+      void this.getOrLoadById(modelName, id).catch((err) => {
+        this.emitError(err, { kind: "evictionRehydrate", modelName, id });
+      });
+    });
+
+    this.objectPool.setAfterPutCallback((modelName, justInsertedId) => {
+      this.checkWatermark(modelName, justInsertedId);
+    });
   }
 
   // ── Context (for identifierFn) ───────────────────────────────────────────
@@ -690,6 +720,13 @@ export class StoreManager<TContext = unknown> {
       // is non-fatal — the cache stays empty and we re-fetch on demand.
       try {
         for (const entry of await this.database.loadPartialIndexes()) {
+          // Ephemeral coverage is never persisted by current code; skip any
+          // stale entry an older build may have left behind, since the pool
+          // comes back empty and the marker would falsely claim completeness.
+          const entryMeta = ModelRegistry.getModelMeta(entry.modelName);
+          if (entryMeta?.loadStrategy === LoadStrategy.Ephemeral) {
+            continue;
+          }
           this.partialIndexCoverage.set(
             StoreManager.collectionKey(
               entry.modelName,
@@ -1547,9 +1584,8 @@ export class StoreManager<TContext = unknown> {
   }
 
   /**
-   * Fire `onSyncGroupDelete` once per group, serially. Errors thrown by the
-   * adopter's callback are caught and routed to `onError` so one bad group
-   * doesn't abort cleanup for the rest.
+   * Fire the adopter's `onSyncGroupDelete` callback. Errors are caught per
+   * group so one bad group doesn't abort cleanup for the rest.
    */
   private async fireOnSyncGroupDelete(
     groupIds: string[] | Iterable<string>,
@@ -1994,6 +2030,11 @@ export class StoreManager<TContext = unknown> {
 
     const isEphemeral = meta?.loadStrategy === LoadStrategy.Ephemeral;
     const results = [...inMemory] as T[];
+    // For Ephemeral models the pool is the only copy. If the watermark evicts
+    // some of the just-hydrated records mid-load (a scope larger than the
+    // model's maxResident), the collection can't be cached as "complete" —
+    // there is no IDB to rehydrate the dropped rows from. Gates coverage below.
+    let cacheable = true;
 
     // Single resolved fetcher — either the batched loader or the per-triple
     // callback. Routing both through one local lets TS narrow the null check.
@@ -2045,15 +2086,24 @@ export class StoreManager<TContext = unknown> {
       // Empty result still expresses "we asked for this model" — mark it
       // loaded so the SSE catchup URL includes it and future inserts arrive.
       this.database.markModelLoaded(modelName);
-      // Mark loaded before the IDB read so SSE inserts arriving during
-      // that read are hydrated directly rather than waiting for next access.
-      // The persistent record is set later via markPartialIndexLoaded.
-      this.partialIndexCoverage.set(key, {
-        modelName,
-        indexKey,
-        value,
-        firstSyncId: this.database.currentMeta?.lastSyncId ?? 0,
-      });
+      // An Ephemeral scope larger than maxResident loses rows to the watermark
+      // during the hydrate loop above; with no IDB to back them, the cached
+      // collection would be silently truncated. Only cache when every loaded
+      // record is still resident.
+      cacheable =
+        !isEphemeral ||
+        results.every((r) => this.objectPool.getById(modelName, r.id) != null);
+      if (cacheable) {
+        // Mark loaded before the IDB read so SSE inserts arriving during
+        // that read are hydrated directly rather than waiting for next access.
+        // The persistent record is set later via markPartialIndexLoaded.
+        this.partialIndexCoverage.set(key, {
+          modelName,
+          indexKey,
+          value,
+          firstSyncId: this.database.currentMeta?.lastSyncId ?? 0,
+        });
+      }
     }
 
     if (!isEphemeral) {
@@ -2074,7 +2124,9 @@ export class StoreManager<TContext = unknown> {
       }
     }
 
-    await this.markPartialIndexLoaded(modelName, indexKey, value);
+    if (cacheable) {
+      await this.markPartialIndexLoaded(modelName, indexKey, value);
+    }
     return results;
   }
 
@@ -2222,6 +2274,15 @@ export class StoreManager<TContext = unknown> {
     if (indexKey === ALL_INDEX_KEY_SENTINEL) {
       this.fullyLoadedModels.add(modelName);
     }
+    // Ephemeral data lives only in the pool and never reaches IDB, so a
+    // persisted coverage marker would resurrect on the next bootstrap
+    // (loadPartialIndexes) while the pool comes back empty — `getOrLoadCollection`
+    // would then trust it, skip the fetch, and return nothing. Keep ephemeral
+    // coverage in-memory only: session-scoped, like the data it describes.
+    const meta = ModelRegistry.getModelMeta(modelName);
+    if (meta?.loadStrategy === LoadStrategy.Ephemeral) {
+      return;
+    }
     await this.database.recordPartialIndex(
       modelName,
       indexKey,
@@ -2245,7 +2306,15 @@ export class StoreManager<TContext = unknown> {
     bag: Record<string, unknown>[],
   ): Promise<void> {
     const meta = ModelRegistry.getModelMeta(compound.modelName);
-    if (meta?.loadStrategy !== LoadStrategy.Ephemeral && bag.length > 0) {
+    if (meta?.loadStrategy === LoadStrategy.Ephemeral) {
+      // Ephemeral models don't persist the bag to IDB, and only the original
+      // waiters' slices are hydrated into the pool. Recording compound coverage
+      // would make `isCoveredByCompound` short-circuit direct loads for scopes
+      // that were never materialized — returning empty. Skip it so those loads
+      // re-fetch from the server. (The waiters already got their slices.)
+      return;
+    }
+    if (bag.length > 0) {
       await this.database.writeModels(compound.modelName, bag);
     }
     await this.markPartialIndexLoaded(
@@ -2267,20 +2336,262 @@ export class StoreManager<TContext = unknown> {
 
   // ── Eviction helpers ──────────────────────────────────────────────────────
 
-  /** Walk the pool for `modelName`, removing instances matching `predicate`. */
+  canEvict(
+    modelName: string,
+    id: string,
+  ): { safe: boolean; reason?: EvictBlockReason } {
+    const meta = ModelRegistry.getModelMeta(modelName);
+    if (this.isStrategyExempt(meta)) {
+      return { safe: false, reason: "strategyExempt" };
+    }
+    const instance = this.objectPool.getById(modelName, id);
+    if (instance != null && instance.hasUnsavedChanges) {
+      return { safe: false, reason: "unsavedChanges" };
+    }
+    if (this.transactionQueue.hasInFlight(modelName, id)) {
+      return { safe: false, reason: "inFlight" };
+    }
+    if (this.objectPool.isObserved(modelName, id)) {
+      return { safe: false, reason: "observed" };
+    }
+    return { safe: true };
+  }
+
+  /**
+   * Strategy/config exemptions shared by `canEvict` and `resolveMaxResident`
+   * so the two never drift. A model is never evicted when it sets
+   * `eviction: false`, is `LocalOnly`, or is `Eager` without an explicit
+   * eviction config — `Eager` means "always resident", so a global
+   * `maxResident` does not apply to it unless it opts in with its own
+   * `eviction` config (`eviction: {}` accepts the global cap).
+   */
+  private isStrategyExempt(meta: ModelMeta | undefined): boolean {
+    if (meta == null) {
+      return false;
+    }
+    if (meta.eviction === false) {
+      return true;
+    }
+    if (meta.loadStrategy === LoadStrategy.LocalOnly) {
+      return true;
+    }
+    if (meta.loadStrategy === LoadStrategy.Eager && meta.eviction == null) {
+      return true;
+    }
+    return false;
+  }
+
+  private resolveMaxResident(modelName: string): number | undefined {
+    const meta = ModelRegistry.getModelMeta(modelName);
+    if (this.isStrategyExempt(meta)) {
+      // Exempt models never arm the watermark — otherwise every insert past a
+      // global `maxResident` runs a full eviction sweep that `canEvict` blocks
+      // on every record anyway (O(n) per insert, O(n²) over a bulk hydrate).
+      return undefined;
+    }
+    const perModel =
+      typeof meta?.eviction === "object" ? meta.eviction.maxResident : undefined;
+    return perModel ?? this.config.eviction?.maxResident;
+  }
+
+  private checkWatermark(modelName: string, protectId?: string): void {
+    const max = this.resolveMaxResident(modelName);
+    if (max == null) {
+      return;
+    }
+    const count = this.objectPool.getAll(modelName).length;
+    if (count <= max) {
+      return;
+    }
+    this.runEvictionLoop(modelName, null, {
+      keepInDb: true,
+      maxToKeep: max,
+      protectId,
+    });
+  }
+
+  private runEvictionLoop(
+    modelName: string,
+    predicate: ((record: BaseModel) => boolean) | null,
+    opts: { keepInDb: boolean; maxToKeep?: number; protectId?: string },
+  ): string[] {
+    const all = this.objectPool.getAll(modelName);
+    const entries = [...all];
+    const lowWaterRatio = this.config.eviction?.lowWaterRatio ?? 0.75;
+    let targetCount: number | null = null;
+    if (opts.maxToKeep != null) {
+      targetCount = entries.length - Math.floor(opts.maxToKeep * lowWaterRatio);
+      if (targetCount <= 0) {
+        return [];
+      }
+    }
+
+    const evicted: BaseModel[] = [];
+    for (const record of entries) {
+      if (opts.protectId != null && record.id === opts.protectId) {
+        // Never evict the record whose own insert triggered this check — a
+        // fresh optimistic create is clean and not yet in-flight, so it would
+        // otherwise be the first record dropped to satisfy the cap.
+        continue;
+      }
+      if (predicate != null && !predicate(record)) {
+        continue;
+      }
+      const result = this.canEvict(modelName, record.id);
+      if (!result.safe) {
+        continue;
+      }
+      evicted.push(record);
+      if (targetCount != null && evicted.length >= targetCount) {
+        break;
+      }
+    }
+
+    if (evicted.length === 0) {
+      return [];
+    }
+
+    const evictedIds = evicted.map((r) => r.id);
+    this.objectPool.evictBatch(modelName, evictedIds);
+    for (const id of evictedIds) {
+      this.loadedIds.delete(StoreManager.modelIdKey(modelName, id));
+    }
+
+    if (!opts.keepInDb) {
+      void this.database.deleteModels(modelName, evictedIds).catch(() => {});
+    }
+
+    this.invalidateEphemeralCoverage(modelName, evicted);
+
+    return evictedIds;
+  }
+
+  /**
+   * Ephemeral models live only in the pool — no IDB backing — so evicting their
+   * records destroys the only copy. Any `partialIndexCoverage` scope an evicted
+   * record belonged to is now incomplete and must be dropped; otherwise a later
+   * `getOrLoadCollection` trusts the marker, skips both the server fetch and the
+   * (non-existent) IDB read, and returns a truncated collection. No-op for
+   * non-ephemeral models, whose IDB rows survive `keepInDb` eviction.
+   */
+  private invalidateEphemeralCoverage(
+    modelName: string,
+    evicted: BaseModel[],
+  ): void {
+    if (evicted.length === 0) {
+      return;
+    }
+    const meta = ModelRegistry.getModelMeta(modelName);
+    if (meta?.loadStrategy !== LoadStrategy.Ephemeral) {
+      return;
+    }
+    // Ephemeral coverage is in-memory only (never persisted), so dropping the
+    // hot-cache entries is enough — no IDB partial-index to clear.
+    this.dropCoverageEntries(
+      modelName,
+      this.affectedScopes(
+        modelName,
+        evicted as unknown as Record<string, unknown>[],
+      ),
+    );
+  }
+
+  /**
+   * After deleting rows for an arbitrary predicate (`evictWhere`), drop any
+   * partial-index coverage whose scope one of the deleted rows belonged to —
+   * in-memory AND persisted — so a later `getOrLoadCollection` for that scope
+   * re-fetches from the server instead of trusting a now-incomplete IDB.
+   * `evictByIndex` clears its single targeted scope inline; this generalizes
+   * that to the arbitrary-predicate case. No-op when no scope is affected.
+   */
+  private async invalidateCoverageForDeleted(
+    modelName: string,
+    deleted: Array<Record<string, unknown>>,
+  ): Promise<void> {
+    const affected = this.affectedScopes(modelName, deleted);
+    if (affected.length === 0) {
+      return;
+    }
+    this.dropCoverageEntries(modelName, affected);
+    for (const entry of affected) {
+      await this.database.clearPartialIndex(
+        entry.modelName,
+        entry.indexKey,
+        entry.value,
+      );
+    }
+  }
+
+  /** Coverage scopes for `modelName` that any of `records` belongs to. The
+   * `*` (whole-model) scope is always affected once any record is removed. */
+  private affectedScopes(
+    modelName: string,
+    records: Array<Record<string, unknown>>,
+  ): PartialIndexEntry[] {
+    const out: PartialIndexEntry[] = [];
+    for (const entry of this.partialIndexCoverage.values()) {
+      if (entry.modelName !== modelName) {
+        continue;
+      }
+      if (
+        entry.indexKey === ALL_INDEX_KEY_SENTINEL ||
+        records.some((r) => r[entry.indexKey] === entry.value)
+      ) {
+        out.push(entry);
+      }
+    }
+    return out;
+  }
+
+  /** Drop the in-memory coverage entries and keep the `*`-coverage mirror
+   * (`fullyLoadedModels`) consistent — flip it off only when no other `*`
+   * scope for the model survives. */
+  private dropCoverageEntries(
+    modelName: string,
+    entries: PartialIndexEntry[],
+  ): void {
+    let clearedAllScope = false;
+    for (const entry of entries) {
+      this.partialIndexCoverage.delete(
+        StoreManager.collectionKey(entry.modelName, entry.indexKey, entry.value),
+      );
+      if (entry.indexKey === ALL_INDEX_KEY_SENTINEL) {
+        clearedAllScope = true;
+      }
+    }
+    if (!clearedAllScope) {
+      return;
+    }
+    for (const entry of this.partialIndexCoverage.values()) {
+      if (
+        entry.modelName === modelName &&
+        entry.indexKey === ALL_INDEX_KEY_SENTINEL
+      ) {
+        return;
+      }
+    }
+    this.fullyLoadedModels.delete(modelName);
+  }
+
   private evictFromPool(
     modelName: string,
     predicate: (m: Record<string, unknown>) => boolean,
-  ): number {
-    let count = 0;
+    safe = false,
+  ): BaseModel[] {
+    const evicted: BaseModel[] = [];
     for (const m of this.objectPool.getAll(modelName)) {
-      if (predicate(m as unknown as Record<string, unknown>)) {
-        this.objectPool.remove(modelName, m.id);
-        this.loadedIds.delete(StoreManager.modelIdKey(modelName, m.id));
-        count++;
+      if (!predicate(m as unknown as Record<string, unknown>)) {
+        continue;
       }
+      if (safe && !this.canEvict(modelName, m.id).safe) {
+        continue;
+      }
+      this.objectPool.remove(modelName, m.id);
+      this.loadedIds.delete(StoreManager.modelIdKey(modelName, m.id));
+      evicted.push(m);
     }
-    return count;
+    this.invalidateEphemeralCoverage(modelName, evicted);
+    return evicted;
   }
 
   /**
@@ -2290,20 +2601,33 @@ export class StoreManager<TContext = unknown> {
    * IDB side is a full cursor scan — prefer `evictByIndex` when the match is
    * "indexed column equals value". Pass `{ keepInDb: true }` to release only
    * the pool and leave the IDB rows cached. Returns the number of rows dropped.
+   *
+   * Coverage for any partial-index scope the deleted rows belonged to is
+   * invalidated (in-memory and persisted), so a later `getOrLoadCollection`
+   * for that scope re-fetches from the server instead of trusting a now-
+   * incomplete IDB. (Skipped under `keepInDb`, where the rows stay cached.)
    */
   async evictWhere(
     modelName: string,
     predicate: (m: Record<string, unknown>) => boolean,
     opts: EvictOptions = {},
   ): Promise<number> {
-    const poolCount = this.evictFromPool(modelName, predicate);
+    const poolCount = this.evictFromPool(modelName, predicate, opts.safe).length;
     if (opts.keepInDb === true) {
       return poolCount;
     }
     const records = await this.database.readAllModels(modelName);
-    const ids = records.filter(predicate).map((r) => r.id as string);
+    let toDelete = records.filter(predicate);
+    if (opts.safe === true) {
+      // Don't delete the IDB backing of a record the pool pass skipped
+      // (observed / dirty / in-flight) — that would orphan a live instance
+      // with no persisted row to reload from.
+      toDelete = toDelete.filter((r) => this.canEvict(modelName, r.id as string).safe);
+    }
+    const ids = toDelete.map((r) => r.id as string);
     if (ids.length > 0) {
       await this.database.deleteModels(modelName, ids);
+      await this.invalidateCoverageForDeleted(modelName, toDelete);
     }
     return poolCount + ids.length;
   }
@@ -2316,6 +2640,15 @@ export class StoreManager<TContext = unknown> {
    * indexKey, value)` re-fetches from the server instead of trusting IDB.
    * Pass `{ keepInDb: true }` to release only the pool — IDB rows and the
    * coverage entry are left intact, so the next load rehydrates from IDB.
+   * Pass `{ safe: true }` to skip records that are observed, dirty, or
+   * in-flight; the IDB delete is filtered to match, and if nothing turns out
+   * to be evictable the coverage entry is left intact (no forced refetch).
+   *
+   * Only the `(indexKey, value)` scope's coverage is invalidated. If the model
+   * also has `*` coverage (a `getOrLoadAll`) or coverage on another index that
+   * these rows belonged to, those scopes are left untouched — keeping the bulk
+   * indexed delete fast. Use `evictWhere` instead when a partial delete must
+   * invalidate every affected scope.
    */
   async evictByIndex(
     modelName: string,
@@ -2323,13 +2656,45 @@ export class StoreManager<TContext = unknown> {
     value: string,
     opts: EvictOptions = {},
   ): Promise<void> {
-    this.evictFromPool(modelName, (m) => m[indexKey] === value);
+    const poolCount = this.evictFromPool(
+      modelName,
+      (m) => m[indexKey] === value,
+      opts.safe,
+    ).length;
     if (opts.keepInDb === true) {
       // Pool-only release: IDB rows and the collection-coverage entry stay,
       // so a future getOrLoadCollection rehydrates from IDB without refetch.
+      // (evictFromPool already dropped coverage for any Ephemeral records,
+      // which have no IDB to rehydrate from.)
       return;
     }
-    await this.database.deleteModelsByIndex(modelName, indexKey, value);
+    if (opts.safe === true) {
+      // Filter the IDB delete to the same evictable set the pool pass used,
+      // so a record skipped for being observed / dirty / in-flight keeps its
+      // persisted row. Trades the bulk index delete for a per-id pass — fine
+      // on the opt-in safe path.
+      const records = await this.database.readModelsByIndex(
+        modelName,
+        indexKey,
+        value,
+      );
+      const ids = records
+        .map((r) => r.id as string)
+        .filter((id) => this.canEvict(modelName, id).safe);
+      if (poolCount === 0 && ids.length === 0) {
+        // Nothing left the pool OR IDB, so the local copy is still complete.
+        // Leave the coverage marker intact — tearing it down would force a
+        // pointless server refetch on the next getOrLoadCollection. (Pool-only
+        // models like Ephemeral can evict from the pool with no IDB rows, so
+        // `poolCount` must be checked too, not just the IDB delete list.)
+        return;
+      }
+      if (ids.length > 0) {
+        await this.database.deleteModels(modelName, ids);
+      }
+    } else {
+      await this.database.deleteModelsByIndex(modelName, indexKey, value);
+    }
     this.partialIndexCoverage.delete(
       StoreManager.collectionKey(modelName, indexKey, value),
     );
@@ -2750,7 +3115,15 @@ export class StoreManager<TContext = unknown> {
       }
     }
 
-    await this.markPartialIndexLoaded(modelName, indexKey, value);
+    // Same cacheability guard as getOrLoadCollection: an Ephemeral scope larger
+    // than maxResident loses rows to the watermark during hydration, and there
+    // is no IDB to back them — don't record coverage the pool can't honor.
+    const cacheable =
+      !isEphemeral ||
+      results.every((r) => this.objectPool.getById(modelName, r.id) != null);
+    if (cacheable) {
+      await this.markPartialIndexLoaded(modelName, indexKey, value);
+    }
     return results;
   }
 

@@ -75,14 +75,120 @@ export class ObjectPool {
    */
   private modelAtoms = new Map<string, IAtom>();
 
+  // ── Observation tracking ────────────────────────────────────────────────
+  //
+  // Per-instance refcount maintained by React hooks (useRecord, useRecords,
+  // useRecordsByIndex). The eviction safety predicate checks isObserved to
+  // prevent evicting records that a mounted component is rendering.
+
+  private observedCounts = new Map<string, Map<string, number>>();
+
+  observeInstance(modelName: string, id: string): void {
+    if (!this.observedCounts.has(modelName)) {
+      this.observedCounts.set(modelName, new Map());
+    }
+    const bucket = this.observedCounts.get(modelName)!;
+    bucket.set(id, (bucket.get(id) ?? 0) + 1);
+  }
+
+  unobserveInstance(modelName: string, id: string): void {
+    const bucket = this.observedCounts.get(modelName);
+    if (bucket == null) {
+      return;
+    }
+    const count = (bucket.get(id) ?? 0) - 1;
+    if (count <= 0) {
+      bucket.delete(id);
+      if (bucket.size === 0) {
+        this.observedCounts.delete(modelName);
+      }
+    } else {
+      bucket.set(id, count);
+    }
+  }
+
+  isObserved(modelName: string, id: string): boolean {
+    return (this.observedCounts.get(modelName)?.get(id) ?? 0) > 0;
+  }
+
+  // ── Eviction markers ────────────────────────────────────────────────────
+  //
+  // Distinguish eviction (self-heal should reload) from server-side deletion
+  // (record is legitimately gone). The marker is transient — cleared on
+  // rehydration or when the self-heal path consumes it.
+
+  private recentlyEvicted = new Set<string>();
+
+  /**
+   * Composite key for the per-(model, id) maps. `modelAtoms` and
+   * `recentlyEvicted` are keyed identically and cross-checked in `trackModel`,
+   * so they must agree — change the format here only.
+   */
+  private static idKey(modelName: string, id: string): string {
+    return `${modelName}:${id}`;
+  }
+
+  private rehydrator: ((modelName: string, id: string) => void) | null = null;
+  private afterPutCallback:
+    | ((modelName: string, justInsertedId: string) => void)
+    | null = null;
+
+  setRehydrator(fn: (modelName: string, id: string) => void): void {
+    this.rehydrator = fn;
+  }
+
+  setAfterPutCallback(
+    fn: (modelName: string, justInsertedId: string) => void,
+  ): void {
+    this.afterPutCallback = fn;
+  }
+
+  evictInstance(modelName: string, id: string): void {
+    this.recentlyEvicted.add(ObjectPool.idKey(modelName, id));
+    this.remove(modelName, id);
+  }
+
+  evictBatch(modelName: string, ids: string[]): void {
+    if (ids.length === 0) {
+      return;
+    }
+    const bucket = this.pool.get(modelName);
+    runInAction(() => {
+      for (const id of ids) {
+        this.recentlyEvicted.add(ObjectPool.idKey(modelName, id));
+        const instance = bucket?.get(id);
+        if (instance != null) {
+          this.detachInverseLinks(modelName, instance);
+        }
+        bucket?.delete(id);
+      }
+      this.snapshotCache.delete(modelName);
+      for (const id of ids) {
+        this.notifyModelChanged(modelName, id);
+      }
+    });
+    this.notify(modelName);
+  }
+
+  wasEvicted(modelName: string, id: string): boolean {
+    return this.recentlyEvicted.has(ObjectPool.idKey(modelName, id));
+  }
+
+  clearEvicted(modelName: string, id: string): void {
+    this.recentlyEvicted.delete(ObjectPool.idKey(modelName, id));
+  }
+
   /**
    * Register a tracked MobX dependency on the pool entry for `(modelName, id)`.
    * Bumped from `put` (when the entry is new) and `remove`, so observers
    * reading the entry through `@Reference` re-run on identity changes — not
    * just on FK changes.
+   *
+   * Self-heal: if this record was evicted and an observer is still reading it,
+   * schedule a background rehydration from IDB/server.
    */
   trackModel(modelName: string, id: string): void {
-    const key = `${modelName}:${id}`;
+    const key = ObjectPool.idKey(modelName, id);
     let atom = this.modelAtoms.get(key);
     const wasJustCreated = atom == null;
     if (atom == null) {
@@ -100,11 +206,16 @@ export class ObjectPool {
     if (!atom.reportObserved() && wasJustCreated) {
       this.modelAtoms.delete(key);
     }
+
+    if (this.recentlyEvicted.has(key) && this.rehydrator != null) {
+      this.recentlyEvicted.delete(key);
+      this.rehydrator(modelName, id);
+    }
   }
 
   /** Bump the atom for `(modelName, id)` if any observer is currently tracking it. */
   private notifyModelChanged(modelName: string, id: string): void {
-    this.modelAtoms.get(`${modelName}:${id}`)?.reportChanged();
+    this.modelAtoms.get(ObjectPool.idKey(modelName, id))?.reportChanged();
   }
 
   /**
@@ -178,6 +289,10 @@ export class ObjectPool {
     instance.store = this;
     this.snapshotCache.delete(modelName);
 
+    if (this.recentlyEvicted.size > 0) {
+      this.recentlyEvicted.delete(ObjectPool.idKey(modelName, instance.id));
+    }
+
     // First-time entry: wire inverse links and bump the per-id atom. Re-puts
     // for an in-place hydrate skip this — the model's own MobX boxes already
     // report their property changes, so observers don't need a duplicate poke.
@@ -190,6 +305,16 @@ export class ObjectPool {
     }
 
     this.notify(modelName, instance);
+
+    // Watermark check runs on every genuinely new insert — covers both the
+    // hydrate path (hydrateAndPut → put) and direct creates (commitCreate →
+    // put). Re-puts for an in-place hydrate don't grow the pool, so skip them.
+    // The just-inserted id is forwarded so the watermark never evicts the very
+    // record that triggered it (a brand-new optimistic create is clean and not
+    // yet in-flight, so it would otherwise be the first thing dropped).
+    if (wasNew && this.afterPutCallback != null) {
+      this.afterPutCallback(modelName, instance.id);
+    }
   }
 
   /** Remove a model. Notifies subscribers. */
@@ -246,6 +371,9 @@ export class ObjectPool {
     if (id != null) {
       const existing = this.getById(modelName, id);
       if (existing != null) {
+        if (this.recentlyEvicted.size > 0) {
+          this.recentlyEvicted.delete(ObjectPool.idKey(modelName, id));
+        }
         existing.hydrate(data);
         return existing;
       }

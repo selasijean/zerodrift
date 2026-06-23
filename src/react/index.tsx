@@ -21,7 +21,7 @@ import React, {
 import { StoreManager, type StoreManagerConfig } from "../core/StoreManager.js";
 import { BootstrapPhase } from "../core/types.js";
 import { LazyCollectionBase, BackRef } from "../core/LazyCollection.js";
-import { readFk } from "../core/ObjectPool.js";
+import { readFk, ObjectPool } from "../core/ObjectPool.js";
 import type { BaseModel } from "../core/BaseModel.js";
 import {
   createStore,
@@ -317,6 +317,51 @@ const settled = (
   error: Error | null,
 ): boolean => ready && !isLoading && error == null;
 
+// ── Observation tracking for eviction safety ──────────────────────────────
+//
+// Tracks which record IDs are currently rendered by list hooks so the
+// eviction safety predicate (pool.isObserved) can protect them. Diffs the
+// snapshot IDs on each render and observes/unobserves the delta.
+
+/** @internal Exported for unit testing the observe/unobserve diffing. */
+export function useObserveItems(
+  pool: ObjectPool,
+  modelName: string,
+  items: BaseModel[],
+): void {
+  const prevIds = useRef<Set<string>>(new Set());
+
+  // Diff each render: observe newly-added ids, unobserve removed ones. No
+  // cleanup here — React fires effect cleanup on every dependency change, and
+  // unobserving the whole set on each `items` change would drop the refcount
+  // for records that are still rendered (the next effect, seeing them already
+  // in `prevIds`, wouldn't re-observe them).
+  useEffect(() => {
+    const currentIds = new Set(items.map((m) => m.id));
+    for (const id of currentIds) {
+      if (!prevIds.current.has(id)) {
+        pool.observeInstance(modelName, id);
+      }
+    }
+    for (const id of prevIds.current) {
+      if (!currentIds.has(id)) {
+        pool.unobserveInstance(modelName, id);
+      }
+    }
+    prevIds.current = currentIds;
+  }, [items, pool, modelName]);
+
+  // Release whatever is still observed on unmount only.
+  useEffect(() => {
+    return () => {
+      for (const id of prevIds.current) {
+        pool.unobserveInstance(modelName, id);
+      }
+      prevIds.current = new Set();
+    };
+  }, [pool, modelName]);
+}
+
 // Model-name-keyed implementations. The public hooks resolve a handle
 // (schema namespace or model class) to a registry name and delegate here,
 // so the pool-subscription / loader machinery lives in exactly one place.
@@ -332,9 +377,28 @@ function useRecordByName<T extends BaseModel>(
   const ready = status.phase === BootstrapPhase.Ready;
   const pause = opts?.pause ?? false;
 
-  const item = usePoolSnapshot(modelName, () =>
-    id != null ? (pool.getById(modelName, id) ?? null) : null,
+  const subscribe = useCallback(
+    (onStoreChange: () => void) => {
+      if (id != null) {
+        pool.observeInstance(modelName, id);
+      }
+      const unsub = pool.subscribe(modelName, onStoreChange);
+      return () => {
+        unsub();
+        if (id != null) {
+          pool.unobserveInstance(modelName, id);
+        }
+      };
+    },
+    [pool, modelName, id],
   );
+
+  const getSnapshot = useCallback(
+    () => (id != null ? (pool.getById(modelName, id) ?? null) : null),
+    [pool, modelName, id],
+  );
+
+  const item = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
   const { isLoading, error, reload } = useLoader(
     () => sm.getOrLoadById(modelName, id!),
@@ -344,6 +408,18 @@ function useRecordByName<T extends BaseModel>(
     // render with isLoading: false from frame zero.
     () => id != null && pool.getById(modelName, id) == null,
   );
+
+  const prevItem = useRef(item);
+
+  useEffect(() => {
+    if (prevItem.current != null && item == null && id != null) {
+      if (pool.wasEvicted(modelName, id)) {
+        pool.clearEvicted(modelName, id);
+        void reload();
+      }
+    }
+    prevItem.current = item;
+  }, [item, id, reload, pool, modelName]);
 
   return {
     data: ready ? (item as T | null) : null,
@@ -380,6 +456,8 @@ function useRecordsByName<T extends BaseModel>(
       .map((id) => byId.get(id))
       .filter((m): m is (typeof all)[number] => m != null);
   }, [all, idsKey]);
+
+  useObserveItems(pool, modelName, items);
 
   const { isLoading, error, reload } = useLoader(
     () => sm.getOrLoadByIds(modelName, ids ?? []),
@@ -439,6 +517,8 @@ function useRecordsByIndexName<T extends BaseModel>(
     });
     // valuesKey: content equality; array identity is unstable for inline literals.
   }, [all, indexKey, valuesKey, hasValues]);
+
+  useObserveItems(sm.objectPool, modelName, items);
 
   const { isLoading, error, reload } = useLoader(
     async () => {

@@ -65,6 +65,7 @@ function toGrouped<T>(f: NormalizedConfig<T>): StoreManagerConfig<T> {
       onModelTouched: f.onModelTouched,
       undoableActions: f.undoableActions,
     },
+    eviction: f.eviction,
   };
 }
 
