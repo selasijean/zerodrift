@@ -121,7 +121,7 @@ const { data: comments } = useRecordsByIndex(store.comment, "issueId", issueId, 
 
 ### `gate` — a shared, re-enableable fetch signal
 
-`pause` is a per-call boolean you recompute each render. `gate` is a **`FetchGate`** — a small reactive signal you construct once and hand to as many hooks (and `useRelation` links) as you like; flip it imperatively and every hook holding it resumes or holds in lockstep. Fetching proceeds only when `!pause` **and** the gate is enabled, so the two compose. Unlike an `AbortSignal`, a gate is re-enableable (it toggles on/off as often as you want) and it only suppresses *new* fetches — anything already in flight runs to completion.
+`pause` is a per-call boolean you recompute each render. `gate` is a **`FetchGate`** — a small reactive signal you construct once and hand to as many hooks (and `useRelation` links) as you like; flip it imperatively and every hook holding it resumes or holds in lockstep. Fetching proceeds only when `!pause` **and** the gate is enabled, so the two compose. A gate toggles on and off as often as you want, and only suppresses *new* fetches — anything already in flight runs to completion.
 
 The headline use is **not fetching for off-screen components**. `useVisibilityGate` wires a gate to an `IntersectionObserver`: spread its `ref` onto the element, pass its `gate` to the hooks, and the subtree goes quiet when scrolled out of view and backfills when it returns.
 

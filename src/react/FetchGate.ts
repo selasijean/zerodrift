@@ -1,9 +1,8 @@
 /**
- * A re-enableable signal that gates whether a read hook is allowed to *start*
- * fetching. Unlike an `AbortSignal` (one-shot and terminal), a `FetchGate`
- * flips on and off as many times as needed — close it when a component scrolls
- * out of view, open it when it comes back, and any hook handed the gate resumes
- * its backfill. It only suppresses *new* fetches; in-flight requests run to
+ * A signal that gates whether a read hook is allowed to *start* fetching. Flip
+ * it on and off as many times as needed — close it when a component scrolls out
+ * of view, open it when it comes back, and any hook handed the gate resumes its
+ * backfill. It only suppresses *new* fetches; in-flight requests run to
  * completion.
  *
  * Construct one directly and share it across hooks, or let `useVisibilityGate`
