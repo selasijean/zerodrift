@@ -1,16 +1,16 @@
 /**
  * A signal that gates whether a read hook is allowed to *start* fetching. Flip
- * it on and off as many times as needed — close it when a component scrolls out
- * of view, open it when it comes back, and any hook handed the gate resumes its
- * backfill. It only suppresses *new* fetches; in-flight requests run to
- * completion.
+ * it on and off as many times as needed and any hook handed the gate holds or
+ * resumes its backfill to match. It only suppresses *new* fetches; in-flight
+ * requests run to completion.
  *
- * Construct one directly and share it across hooks, or let `useVisibilityGate`
- * wire one to an `IntersectionObserver` for you:
+ * Construct one, pass it to as many hooks as you like, and drive it from
+ * whatever signal you want — an `IntersectionObserver` (don't fetch off-screen),
+ * focus, route changes, a feature flag:
  *
  *     const gate = new FetchGate(false);
  *     useRecord(store.issue, id, { gate });
- *     // …later, from an IntersectionObserver callback:
+ *     // …from an IntersectionObserver callback the caller owns:
  *     gate.set(entry.isIntersecting);
  */
 export class FetchGate {

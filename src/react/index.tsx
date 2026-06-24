@@ -310,13 +310,13 @@ export interface UseQueryOptions {
    */
   pause?: boolean;
   /**
-   * A re-enableable signal that gates fetching, on top of `pause`. While the
-   * gate is disabled the hook holds its fetch exactly as `pause: true` does,
+   * A re-enableable `FetchGate` that gates fetching, on top of `pause`. While
+   * the gate is disabled the hook holds its fetch exactly as `pause: true` does,
    * and resumes (backfilling if needed) when it re-enables. Unlike `pause` it
-   * can be shared across many hooks and driven imperatively — e.g. wire one to
-   * an `IntersectionObserver` via `useVisibilityGate` to stop off-screen
-   * components from fetching. Fetching proceeds only when `!pause` *and* the
-   * gate is enabled.
+   * can be shared across many hooks and driven imperatively — wire one to an
+   * `IntersectionObserver` to stop off-screen components from fetching, to
+   * window focus, etc. Fetching proceeds only when `!pause` *and* the gate is
+   * enabled.
    */
   gate?: FetchGate;
 }
@@ -345,66 +345,6 @@ export function usePaused(opts: UseQueryOptions | undefined): boolean {
   const getEnabled = useCallback(() => gate?.enabled ?? true, [gate]);
   const gateEnabled = useSyncExternalStore(subscribe, getEnabled, getEnabled);
   return (opts?.pause ?? false) || !gateEnabled;
-}
-
-/** Options for {@link useVisibilityGate}. Extends `IntersectionObserverInit`
- * (`root`, `rootMargin`, `threshold`) with the gate's starting state. */
-export interface UseVisibilityGateOptions extends IntersectionObserverInit {
-  /** Gate state before the observer first reports. Defaults to `false`
-   * (treat as off-screen until proven visible), so nothing fetches until the
-   * element is actually seen. Set `true` to fetch optimistically up front. */
-  initiallyVisible?: boolean;
-}
-
-/**
- * A {@link FetchGate} driven by an `IntersectionObserver`: enabled while the
- * observed element is on screen, disabled when it scrolls out. Spread the
- * returned `ref` onto the element and hand `gate` to any read hook to stop
- * off-screen components from fetching.
- *
- *     const { ref, gate } = useVisibilityGate({ rootMargin: "200px" });
- *     const { data } = useRecord(store.issue, id, { gate });
- *     return <div ref={ref}>{data?.title}</div>;
- *
- * The gate is a stable instance for the component's lifetime. Outside the
- * browser (SSR / no `IntersectionObserver`) it stays at `initiallyVisible`.
- */
-export function useVisibilityGate(options?: UseVisibilityGateOptions): {
-  ref: (el: Element | null) => void;
-  gate: FetchGate;
-} {
-  const gateRef = useRef<FetchGate | null>(null);
-  if (gateRef.current == null) {
-    gateRef.current = new FetchGate(options?.initiallyVisible ?? false);
-  }
-  const gate = gateRef.current;
-
-  // Keep the latest observer options without re-creating the observer each
-  // render (option object literals are unstable).
-  const optsRef = useRef(options);
-  optsRef.current = options;
-
-  const observerRef = useRef<IntersectionObserver | null>(null);
-
-  const ref = useCallback(
-    (el: Element | null) => {
-      observerRef.current?.disconnect();
-      observerRef.current = null;
-      if (el == null || typeof IntersectionObserver === "undefined") {
-        return;
-      }
-      const observer = new IntersectionObserver((entries) => {
-        gate.set(entries.some((entry) => entry.isIntersecting));
-      }, optsRef.current);
-      observer.observe(el);
-      observerRef.current = observer;
-    },
-    [gate],
-  );
-
-  useEffect(() => () => observerRef.current?.disconnect(), []);
-
-  return { ref, gate };
 }
 
 // ── Observation tracking for eviction safety ──────────────────────────────
