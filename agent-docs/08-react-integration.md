@@ -123,30 +123,46 @@ const { data: comments } = useRecordsByIndex(store.comment, "issueId", issueId, 
 
 `pause` is a per-call boolean you recompute each render. `gate` is a **`FetchGate`** — a small reactive signal you construct once and hand to as many hooks (and `useRelation` links) as you like; flip it imperatively and every hook holding it resumes or holds in lockstep. Fetching proceeds only when `!pause` **and** the gate is enabled, so the two compose. A gate toggles on and off as often as you want, and only suppresses *new* fetches — anything already in flight runs to completion.
 
-`FetchGate` is just the primitive — `new FetchGate(enabled?)`, `.enable()` / `.disable()` / `.set(bool)`, `.enabled`. You drive it from whatever signal you want; the engine doesn't bake in any particular source. The headline use is **not fetching for off-screen components**, which you wire with your own `IntersectionObserver` (or a hook from your stack):
+`FetchGate` is just the primitive — `new FetchGate(enabled?)`, `.enable()` / `.disable()` / `.set(bool)`, `.enabled`. You drive it from whatever signal you want; the engine doesn't bake in any particular source. The headline use is **not fetching for off-screen components**, which you wire with your own `IntersectionObserver`.
+
+This stays out of the library on purpose — the source of the signal is yours — but it's a handful of lines to wrap into a hook in your own codebase. A `useVisibilityGate` recipe:
 
 ```typescript
-import { FetchGate, useRecord, useRelation } from "zerodrift/react";
+import { useCallback, useRef } from "react";
+import { FetchGate } from "zerodrift/react";
 
-function IssueCard({ id }: { id: string }) {
-  const gate = useRef(new FetchGate(false)).current; // off-screen until seen
+// Userland — copy into your app. Returns a ref to spread on an element and a
+// gate that's enabled while that element is on screen.
+export function useVisibilityGate(options?: IntersectionObserverInit) {
+  const gate = useRef<FetchGate>(null!);
+  if (gate.current == null) gate.current = new FetchGate(false); // off until seen
+  const optsRef = useRef(options);
+  optsRef.current = options;
+
   const ref = useCallback((el: Element | null) => {
-    if (el == null) return;
+    if (el == null || typeof IntersectionObserver === "undefined") return;
     const io = new IntersectionObserver(
-      ([entry]) => gate.set(entry.isIntersecting),
-      { rootMargin: "200px" },
+      (entries) => gate.current.set(entries.some((e) => e.isIntersecting)),
+      optsRef.current,
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [gate]);
+  }, []);
 
+  return { ref, gate: gate.current };
+}
+```
+
+```typescript
+function IssueCard({ id }: { id: string }) {
+  const { ref, gate } = useVisibilityGate({ rootMargin: "200px" });
   const { data: issue } = useRecord(store.issue, id, { gate });
   const { data: comments } = useRelation(issue?.comments, { gate });
   return <div ref={ref}>{issue?.title} · {comments.length} comments</div>;
 }
 ```
 
-The same gate works for any source — focus, route changes, a feature flag — and sharing one avoids threading a `pause` boolean through every call and lifting that state up.
+The same gate works for any source — window focus, route changes, a feature flag — and sharing one avoids threading a `pause` boolean through every call and lifting that state up.
 
 > Scope note: a gate gates the **hook-driven** fetches (`useRecord`/`useRecords`/`useRecordsByIndex`/`useRelation`). The *automatic* eager loads the store fires outside React — `@Reference` / `@ReferenceCollection` calling `.load()` inside `makeModelObservable` — are not gated, because those are per-model, not per-component.
 
