@@ -103,7 +103,7 @@ to the schema's `.indexed()` fields; for a class handle it's `string`.
 counts from frame zero). `reload()` always re-fires regardless of cache
 state; auto-fire on mount is gated so cached data doesn't re-scan IDB.
 
-Every read hook takes an optional trailing `opts: { pause?: boolean }`
+Every read hook takes an optional trailing `opts: { pause?: boolean; gate?: FetchGate }`
 (`useRecord(handle, id, opts)`, `useRecords(handle, ids, opts)`,
 `useRecordsByIndex(handle, key, value, opts)`, `useRelation(relation, opts)`).
 While `pause` is true the hook still reads the pool synchronously — anything
@@ -118,6 +118,28 @@ const { data: comments } = useRecordsByIndex(store.comment, "issueId", issueId, 
   pause: !panelOpen || issue == null,
 });
 ```
+
+### `gate` — a shared, re-enableable fetch signal
+
+`pause` is a per-call boolean you recompute each render. `gate` is a **`FetchGate`** — a small reactive signal you construct once and hand to as many hooks (and `useRelation` links) as you like; flip it imperatively and every hook holding it resumes or holds in lockstep. Fetching proceeds only when `!pause` **and** the gate is enabled, so the two compose. Unlike an `AbortSignal`, a gate is re-enableable (it toggles on/off as often as you want) and it only suppresses *new* fetches — anything already in flight runs to completion.
+
+The headline use is **not fetching for off-screen components**. `useVisibilityGate` wires a gate to an `IntersectionObserver`: spread its `ref` onto the element, pass its `gate` to the hooks, and the subtree goes quiet when scrolled out of view and backfills when it returns.
+
+```typescript
+import { useVisibilityGate, useRecord, useRelation } from "zerodrift/react";
+
+function IssueCard({ id }: { id: string }) {
+  // initiallyVisible defaults to false → nothing fetches until the card is seen.
+  const { ref, gate } = useVisibilityGate({ rootMargin: "200px" });
+  const { data: issue } = useRecord(store.issue, id, { gate });
+  const { data: comments } = useRelation(issue?.comments, { gate });
+  return <div ref={ref}>{issue?.title} · {comments.length} comments</div>;
+}
+```
+
+You can also drive a `FetchGate` yourself for non-visibility cases (a "fetch only while this tab is focused" signal, say): `const gate = new FetchGate(false); … gate.enable()`. A shared gate avoids threading a `pause` boolean through every call and lifting that state up.
+
+> Scope note: a gate gates the **hook-driven** fetches (`useRecord`/`useRecords`/`useRecordsByIndex`/`useRelation`). The *automatic* eager loads the store fires outside React — `@Reference` / `@ReferenceCollection` calling `.load()` inside `makeModelObservable` — are not gated, because those are per-model, not per-component.
 
 ```typescript
 // Decorator-class handle:

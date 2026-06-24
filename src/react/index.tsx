@@ -22,6 +22,8 @@ import { StoreManager, type StoreManagerConfig } from "../core/StoreManager.js";
 import { BootstrapPhase } from "../core/types.js";
 import { LazyCollectionBase, BackRef } from "../core/LazyCollection.js";
 import { readFk, ObjectPool } from "../core/ObjectPool.js";
+import { FetchGate } from "./FetchGate.js";
+export { FetchGate } from "./FetchGate.js";
 import type { BaseModel } from "../core/BaseModel.js";
 import {
   createStore,
@@ -307,6 +309,16 @@ export interface UseQueryOptions {
    * is ready (auth resolved, a parent record loaded, a panel actually opened).
    */
   pause?: boolean;
+  /**
+   * A re-enableable signal that gates fetching, on top of `pause`. While the
+   * gate is disabled the hook holds its fetch exactly as `pause: true` does,
+   * and resumes (backfilling if needed) when it re-enables. Unlike `pause` it
+   * can be shared across many hooks and driven imperatively — e.g. wire one to
+   * an `IntersectionObserver` via `useVisibilityGate` to stop off-screen
+   * components from fetching. Fetching proceeds only when `!pause` *and* the
+   * gate is enabled.
+   */
+  gate?: FetchGate;
 }
 
 /** `isLoaded` for the pool-keyed hooks: ready, not loading, no error — true
@@ -316,6 +328,84 @@ const settled = (
   isLoading: boolean,
   error: Error | null,
 ): boolean => ready && !isLoading && error == null;
+
+/**
+ * Resolve the effective "hold fetching" flag from a hook's options: paused when
+ * `pause` is true OR a `gate` is present and disabled. Subscribes to the gate
+ * via `useSyncExternalStore` so a flip re-renders the consumer (no gate → a
+ * stable no-op subscription, so this is cheap on the common path).
+ */
+/** @internal Exported for unit testing the gate→pause resolution. */
+export function usePaused(opts: UseQueryOptions | undefined): boolean {
+  const gate = opts?.gate;
+  const subscribe = useCallback(
+    (onChange: () => void) => gate?.subscribe(onChange) ?? (() => {}),
+    [gate],
+  );
+  const getEnabled = useCallback(() => gate?.enabled ?? true, [gate]);
+  const gateEnabled = useSyncExternalStore(subscribe, getEnabled, getEnabled);
+  return (opts?.pause ?? false) || !gateEnabled;
+}
+
+/** Options for {@link useVisibilityGate}. Extends `IntersectionObserverInit`
+ * (`root`, `rootMargin`, `threshold`) with the gate's starting state. */
+export interface UseVisibilityGateOptions extends IntersectionObserverInit {
+  /** Gate state before the observer first reports. Defaults to `false`
+   * (treat as off-screen until proven visible), so nothing fetches until the
+   * element is actually seen. Set `true` to fetch optimistically up front. */
+  initiallyVisible?: boolean;
+}
+
+/**
+ * A {@link FetchGate} driven by an `IntersectionObserver`: enabled while the
+ * observed element is on screen, disabled when it scrolls out. Spread the
+ * returned `ref` onto the element and hand `gate` to any read hook to stop
+ * off-screen components from fetching.
+ *
+ *     const { ref, gate } = useVisibilityGate({ rootMargin: "200px" });
+ *     const { data } = useRecord(store.issue, id, { gate });
+ *     return <div ref={ref}>{data?.title}</div>;
+ *
+ * The gate is a stable instance for the component's lifetime. Outside the
+ * browser (SSR / no `IntersectionObserver`) it stays at `initiallyVisible`.
+ */
+export function useVisibilityGate(options?: UseVisibilityGateOptions): {
+  ref: (el: Element | null) => void;
+  gate: FetchGate;
+} {
+  const gateRef = useRef<FetchGate | null>(null);
+  if (gateRef.current == null) {
+    gateRef.current = new FetchGate(options?.initiallyVisible ?? false);
+  }
+  const gate = gateRef.current;
+
+  // Keep the latest observer options without re-creating the observer each
+  // render (option object literals are unstable).
+  const optsRef = useRef(options);
+  optsRef.current = options;
+
+  const observerRef = useRef<IntersectionObserver | null>(null);
+
+  const ref = useCallback(
+    (el: Element | null) => {
+      observerRef.current?.disconnect();
+      observerRef.current = null;
+      if (el == null || typeof IntersectionObserver === "undefined") {
+        return;
+      }
+      const observer = new IntersectionObserver((entries) => {
+        gate.set(entries.some((entry) => entry.isIntersecting));
+      }, optsRef.current);
+      observer.observe(el);
+      observerRef.current = observer;
+    },
+    [gate],
+  );
+
+  useEffect(() => () => observerRef.current?.disconnect(), []);
+
+  return { ref, gate };
+}
 
 // ── Observation tracking for eviction safety ──────────────────────────────
 //
@@ -375,7 +465,7 @@ function useRecordByName<T extends BaseModel>(
   const { sm, status } = useSyncEngine();
   const pool = sm.objectPool;
   const ready = status.phase === BootstrapPhase.Ready;
-  const pause = opts?.pause ?? false;
+  const pause = usePaused(opts);
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
@@ -442,7 +532,7 @@ function useRecordsByName<T extends BaseModel>(
   const { sm, status } = useSyncEngine();
   const pool = sm.objectPool;
   const ready = status.phase === BootstrapPhase.Ready;
-  const pause = opts?.pause ?? false;
+  const pause = usePaused(opts);
   const idsKey = ids?.join(",") ?? "";
 
   const all = usePoolSnapshot(modelName, () => pool.getAll(modelName));
@@ -493,7 +583,7 @@ function useRecordsByIndexName<T extends BaseModel>(
 ): AsyncResource<T[]> {
   const { sm, status } = useSyncEngine();
   const ready = status.phase === BootstrapPhase.Ready;
-  const pause = opts?.pause ?? false;
+  const pause = usePaused(opts);
 
   const values =
     value == null
@@ -619,7 +709,7 @@ export function useRelation(
 ): AsyncResource<BaseModel[] | BaseModel | null> {
   const [tick, forceRender] = useState(0);
   const isBackRef = relation instanceof BackRef;
-  const pause = opts?.pause ?? false;
+  const pause = usePaused(opts);
 
   // Collections expose watch() for invalidation; BackRef does not.
   useEffect(() => {
