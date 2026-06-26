@@ -22,6 +22,8 @@ import { StoreManager, type StoreManagerConfig } from "../core/StoreManager.js";
 import { BootstrapPhase } from "../core/types.js";
 import { LazyCollectionBase, BackRef } from "../core/LazyCollection.js";
 import { readFk, ObjectPool } from "../core/ObjectPool.js";
+import { FetchGate } from "./FetchGate.js";
+export { FetchGate } from "./FetchGate.js";
 import type { BaseModel } from "../core/BaseModel.js";
 import {
   createStore,
@@ -307,6 +309,16 @@ export interface UseQueryOptions {
    * is ready (auth resolved, a parent record loaded, a panel actually opened).
    */
   pause?: boolean;
+  /**
+   * A re-enableable `FetchGate` that gates fetching, on top of `pause`. While
+   * the gate is disabled the hook holds its fetch exactly as `pause: true` does,
+   * and resumes (backfilling if needed) when it re-enables. Unlike `pause` it
+   * can be shared across many hooks and driven imperatively — wire one to an
+   * `IntersectionObserver` to stop off-screen components from fetching, to
+   * window focus, etc. Fetching proceeds only when `!pause` *and* the gate is
+   * enabled.
+   */
+  gate?: FetchGate;
 }
 
 /** `isLoaded` for the pool-keyed hooks: ready, not loading, no error — true
@@ -316,6 +328,24 @@ const settled = (
   isLoading: boolean,
   error: Error | null,
 ): boolean => ready && !isLoading && error == null;
+
+/**
+ * Resolve the effective "hold fetching" flag from a hook's options: paused when
+ * `pause` is true OR a `gate` is present and disabled. Subscribes to the gate
+ * via `useSyncExternalStore` so a flip re-renders the consumer (no gate → a
+ * stable no-op subscription, so this is cheap on the common path).
+ */
+/** @internal Exported for unit testing the gate→pause resolution. */
+export function usePaused(opts: UseQueryOptions | undefined): boolean {
+  const gate = opts?.gate;
+  const subscribe = useCallback(
+    (onChange: () => void) => gate?.subscribe(onChange) ?? (() => {}),
+    [gate],
+  );
+  const getEnabled = useCallback(() => gate?.enabled ?? true, [gate]);
+  const gateEnabled = useSyncExternalStore(subscribe, getEnabled, getEnabled);
+  return (opts?.pause ?? false) || !gateEnabled;
+}
 
 // ── Observation tracking for eviction safety ──────────────────────────────
 //
@@ -375,7 +405,7 @@ function useRecordByName<T extends BaseModel>(
   const { sm, status } = useSyncEngine();
   const pool = sm.objectPool;
   const ready = status.phase === BootstrapPhase.Ready;
-  const pause = opts?.pause ?? false;
+  const pause = usePaused(opts);
 
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
@@ -442,7 +472,7 @@ function useRecordsByName<T extends BaseModel>(
   const { sm, status } = useSyncEngine();
   const pool = sm.objectPool;
   const ready = status.phase === BootstrapPhase.Ready;
-  const pause = opts?.pause ?? false;
+  const pause = usePaused(opts);
   const idsKey = ids?.join(",") ?? "";
 
   const all = usePoolSnapshot(modelName, () => pool.getAll(modelName));
@@ -493,7 +523,7 @@ function useRecordsByIndexName<T extends BaseModel>(
 ): AsyncResource<T[]> {
   const { sm, status } = useSyncEngine();
   const ready = status.phase === BootstrapPhase.Ready;
-  const pause = opts?.pause ?? false;
+  const pause = usePaused(opts);
 
   const values =
     value == null
@@ -619,7 +649,7 @@ export function useRelation(
 ): AsyncResource<BaseModel[] | BaseModel | null> {
   const [tick, forceRender] = useState(0);
   const isBackRef = relation instanceof BackRef;
-  const pause = opts?.pause ?? false;
+  const pause = usePaused(opts);
 
   // Collections expose watch() for invalidation; BackRef does not.
   useEffect(() => {
