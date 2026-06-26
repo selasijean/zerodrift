@@ -128,7 +128,7 @@ const { data: comments } = useRecordsByIndex(store.comment, "issueId", issueId, 
 This stays out of the library on purpose — the source of the signal is yours — but it's a handful of lines to wrap into a hook in your own codebase. A `useVisibilityGate` recipe:
 
 ```typescript
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { FetchGate } from "zerodrift/react";
 
 // Userland — copy into your app. Returns a ref to spread on an element and a
@@ -138,16 +138,22 @@ export function useVisibilityGate(options?: IntersectionObserverInit) {
   if (gate.current == null) gate.current = new FetchGate(false); // off until seen
   const optsRef = useRef(options);
   optsRef.current = options;
+  const observer = useRef<IntersectionObserver | null>(null);
 
+  // Don't return a cleanup from the callback ref — React 18 ignores it. Instead
+  // disconnect the previous observer before (re)observing, and again on unmount.
   const ref = useCallback((el: Element | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
     if (el == null || typeof IntersectionObserver === "undefined") return;
-    const io = new IntersectionObserver(
+    observer.current = new IntersectionObserver(
       (entries) => gate.current.set(entries.some((e) => e.isIntersecting)),
       optsRef.current,
     );
-    io.observe(el);
-    return () => io.disconnect();
+    observer.current.observe(el);
   }, []);
+
+  useEffect(() => () => observer.current?.disconnect(), []);
 
   return { ref, gate: gate.current };
 }
