@@ -273,7 +273,27 @@ export class SyncConnection extends BaseSSEConnection {
         this.remoteUndoEvaluate != null &&
         !this.queue.isOwnSyncId(packet.syncId)
       ) {
-        await this.captureRemoteUndo(packet);
+        const capturedActions = await this.captureRemoteUndo(packet);
+
+        // Step 1c: supersession rebase. Foreign UNTRACKED edits will never
+        // be unwound through the undo stack, so any tracked entry field they
+        // overwrite must stop reverting locally. Captured actions are
+        // exempt — LIFO undo keeps their chains coherent — and own packets
+        // never reach this branch.
+        for (const action of packet.syncActions) {
+          if (
+            action.action === "V" ||
+            action.data == null ||
+            capturedActions.has(action)
+          ) {
+            continue;
+          }
+          this.queue.rebaseRemoteEntries(
+            action.modelName,
+            action.modelId,
+            action.data,
+          );
+        }
       }
 
       // Step 2: apply to IndexedDB (server is SSOT — IDB mirrors it)
@@ -356,19 +376,30 @@ export class SyncConnection extends BaseSSEConnection {
    *
    *  Best-effort: a failure here (e.g. an IDB read rejecting mid-teardown)
    *  is reported and swallowed — it must never abort delta application or
-   *  stall the sequential packet queue. */
-  private async captureRemoteUndo(packet: DeltaPacket) {
+   *  stall the sequential packet queue.
+   *
+   *  Returns the actions that produced a capture so the caller's
+   *  supersession pass can exempt them. */
+  private async captureRemoteUndo(
+    packet: DeltaPacket,
+  ): Promise<Set<SyncAction>> {
+    const capturedActions = new Set<SyncAction>();
     try {
-      const captured = (
-        await Promise.all(
-          packet.syncActions.map((action) =>
-            // "V" confirms this client's own optimistic write — never remote.
-            action.action === "V"
-              ? null
-              : this.captureRemoteChange(packet.syncId, action),
-          ),
-        )
-      ).filter((c): c is RemoteChange => c != null);
+      const results = await Promise.all(
+        packet.syncActions.map((action) =>
+          // "V" confirms this client's own optimistic write — never remote.
+          action.action === "V"
+            ? null
+            : this.captureRemoteChange(packet.syncId, action),
+        ),
+      );
+      const captured: RemoteChange[] = [];
+      results.forEach((change, i) => {
+        if (change != null) {
+          captured.push(change);
+          capturedActions.add(packet.syncActions[i]);
+        }
+      });
       if (captured.length > 0) {
         this.queue.recordRemoteEntry({
           source: "remote",
@@ -385,6 +416,7 @@ export class SyncConnection extends BaseSSEConnection {
         syncId: packet.syncId,
       });
     }
+    return capturedActions;
   }
 
   private async captureRemoteChange(

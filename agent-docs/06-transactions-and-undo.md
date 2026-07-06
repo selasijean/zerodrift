@@ -337,6 +337,20 @@ Other behavioral notes:
 - Like `UndoableAction`s, remote entries are memory-only — not cached in IDB, lost on reload.
 - Rebase interplay: if the user has a pending local change on a field the tracked delta also touches, `previousData()` (and the captured `before`) reflect the user's optimistic value — undoing the remote entry won't clobber the user's edit, and the server-side revert rebase-reapplies it as usual.
 
+### Supersession rebasing
+
+Just as `rebaseAll` keeps in-flight transactions' undo baselines current, incoming deltas keep remote entries truthful — but with different arithmetic, because a remote entry's local revert is a *prediction* of the server's revert-by-syncId, not a last-writer-wins re-assertion.
+
+When a **foreign, untracked** data-bearing action arrives (one that neither got captured into its own entry nor belongs to this client — own echoes and undo compensations are exempt), every remote entry on either stack is rebased for that `(modelName, modelId)`:
+
+| Tracked change | Effect of the foreign edit |
+|---|---|
+| `"U"` | Any field the foreign edit moved to a value matching *neither* the entry's `after` *nor* its `before` is **pruned** from the entry — the tracked edit no longer owns it, so undo won't clobber the newer value and a failed undo's rollback can't resurrect the stale one. A change whose fields all prune is removed; the entry itself stays (the server-side revert by syncId is still meaningful). |
+| `"I"` | The foreign fields merge into the stored record so a later redo re-inserts fresh data. Undo (= delete) is unaffected. |
+| `"D"` / `"A"` (undo stack only) | The delete's snapshot-restore is dropped — a data-bearing delta for that id means the record exists again server-side, and restoring the stale snapshot would clobber it. On the redo stack the restore already ran, so redo's re-delete stays valid. |
+
+**Tracked** deltas are deliberately exempt: two tracked agent edits on the same field unwind correctly in LIFO order (undo the newer entry first, then the older), so pruning the older entry would break the chain. Likewise the compensation echo of your own undo must not prune the redo entry, or redo would lose its optimistic local replay.
+
 ## Offline Resilience
 
 Every `enqueue()` call writes the serialized transaction to IDB's `__transactions` store:

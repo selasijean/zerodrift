@@ -417,6 +417,134 @@ describe("compensation suppression", () => {
   });
 });
 
+describe("supersession rebasing", () => {
+  it("a foreign untracked edit prunes the superseded field; other fields still revert", async () => {
+    const task = poolTask("t1", { title: "A", done: false });
+    let track = true;
+    const undo = vi.fn(async (_a: RemoteUndoAction) => undefined);
+    setup({ evaluate: () => track, undo });
+
+    await process(conn, {
+      syncId: 40,
+      syncActions: [update("t1", { title: "B", done: true })], // tracked
+    });
+    track = false;
+    await process(conn, {
+      syncId: 41,
+      syncActions: [update("t1", { title: "C" })], // foreign, untracked
+    });
+
+    await queue.undo();
+    expect(task.title).toBe("C"); // superseded — undo must not clobber
+    expect(task.done).toBe(false); // untouched field still reverts
+    expect(undo).toHaveBeenCalledTimes(1); // server-side revert still fires
+  });
+
+  it("a failed undo's rollback cannot resurrect a superseded value", async () => {
+    const task = poolTask("t1", { title: "A" });
+    let track = true;
+    setup({
+      evaluate: () => track,
+      undo: async () => {
+        throw new Error("server unreachable");
+      },
+    });
+
+    await process(conn, {
+      syncId: 42,
+      syncActions: [update("t1", { title: "B" })],
+    });
+    track = false;
+    await process(conn, {
+      syncId: 43,
+      syncActions: [update("t1", { title: "C" })],
+    });
+
+    await queue.undo(); // handler fails → rollback
+    expect(task.title).toBe("C"); // not "B" — the stale after was pruned
+    expect(queue.remoteUndoDepth).toBe(1);
+  });
+
+  it("tracked chains are exempt: two tracked edits unwind LIFO to the original", async () => {
+    const task = poolTask("t1", { title: "A" });
+    setup({ undo: vi.fn() });
+
+    await process(conn, {
+      syncId: 44,
+      syncActions: [update("t1", { title: "B" })],
+    });
+    await process(conn, {
+      syncId: 45,
+      syncActions: [update("t1", { title: "C" })],
+    });
+
+    await queue.undo();
+    expect(task.title).toBe("B");
+    await queue.undo();
+    expect(task.title).toBe("A");
+  });
+
+  it("the compensation echo does not prune the redo entry", async () => {
+    const task = poolTask("t1", { title: "A" });
+    const redo = vi.fn(async (_a: RemoteUndoAction) => undefined);
+    setup({
+      undo: async () => ({ compensatingSyncId: 99 }),
+      redo,
+    });
+
+    await process(conn, {
+      syncId: 46,
+      syncActions: [update("t1", { title: "B" })],
+    });
+    await queue.undo();
+    expect(task.title).toBe("A");
+
+    // Server's compensating delta echoes the reverted value back.
+    await process(conn, {
+      syncId: 99,
+      syncActions: [update("t1", { title: "A" })],
+    });
+
+    await queue.redo();
+    expect(task.title).toBe("B"); // redo kept its optimistic local replay
+    expect(redo).toHaveBeenCalledTimes(1);
+  });
+
+  it("a foreign re-insert drops a tracked delete's snapshot restore", async () => {
+    poolTask("t1", { title: "Original", done: true });
+    await db.writeModels("TestTask", [
+      { id: "t1", title: "Original", done: true },
+    ]);
+    let track = true;
+    const undo = vi.fn(async (_a: RemoteUndoAction) => undefined);
+    setup({ evaluate: () => track, undo });
+
+    await process(conn, {
+      syncId: 47,
+      syncActions: [{ action: "D", modelName: "TestTask", modelId: "t1" }],
+    });
+    expect(pool.getById("TestTask", "t1")).toBeUndefined();
+
+    track = false;
+    await process(conn, {
+      syncId: 48,
+      syncActions: [
+        {
+          action: "I",
+          modelName: "TestTask",
+          modelId: "t1",
+          data: { title: "Recreated" },
+        },
+      ],
+    });
+
+    await queue.undo();
+    const model = pool.getById("TestTask", "t1") as TestTask;
+    expect(model?.title).toBe("Recreated"); // stale snapshot not restored
+    expect(undo).toHaveBeenCalledTimes(1); // server revert still submitted
+  });
+});
+
 describe("storage failure resilience", () => {
   it("a capture-time IDB failure is reported and never stalls the packet queue", async () => {
     // Not pooled → capture falls back to an IDB read, which we make reject.

@@ -194,6 +194,66 @@ export class TransactionQueue {
     this.pushUndoEntry({ kind: "single", item: action }, { keepRedo: true });
   }
 
+  /** Supersession rebase for remote entries, mirroring what `rebaseAll` does
+   * for in-flight transactions: keep stack entries truthful as the world
+   * moves. Called by SyncConnection only for FOREIGN, UNTRACKED data-bearing
+   * actions — tracked deltas and own echoes/compensations are exempt because
+   * LIFO undo keeps those chains coherent on its own.
+   *
+   * A foreign edit that moves a field to a value matching neither side of a
+   * tracked change has superseded it: the field is dropped from the entry's
+   * local revert/replay so undo can't clobber the newer value (and a failed
+   * undo's rollback can't resurrect the stale one). Entries whose change
+   * lists empty out stay on the stack — the server-side revert by syncId is
+   * still meaningful. */
+  rebaseRemoteEntries(
+    modelName: string,
+    modelId: string,
+    serverData: Record<string, unknown>,
+  ) {
+    for (const stack of [this.undoStack, this.redoStack]) {
+      for (const entry of stack) {
+        if (entry.kind !== "single" || !isRemote(entry.item)) {
+          continue;
+        }
+        const changes = entry.item.changes;
+        for (let i = changes.length - 1; i >= 0; i--) {
+          const change = changes[i];
+          if (change.modelName !== modelName || change.modelId !== modelId) {
+            continue;
+          }
+          if (change.action === "U") {
+            for (const [key, value] of Object.entries(serverData)) {
+              if (key === "id" || !(key in change.after)) {
+                continue;
+              }
+              if (
+                !Object.is(value, change.after[key]) &&
+                !Object.is(value, change.before[key])
+              ) {
+                delete change.after[key];
+                delete change.before[key];
+              }
+            }
+            if (Object.keys(change.after).length === 0) {
+              changes.splice(i, 1);
+            }
+          } else if (change.action === "I") {
+            // Keep the redo re-insert fresh: later foreign field updates
+            // merge into the stored record. Undo (= delete) is unaffected.
+            change.data = { ...change.data, ...serverData };
+          } else if (stack === this.undoStack) {
+            // "D"/"A" awaiting undo: a data-bearing delta for this id means
+            // the record exists again server-side — restoring the stale
+            // snapshot would clobber the resurrected record. (On the redo
+            // stack the restore already ran; redo's re-delete stays valid.)
+            changes.splice(i, 1);
+          }
+        }
+      }
+    }
+  }
+
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
     return () => {
@@ -605,7 +665,6 @@ export class TransactionQueue {
     const skipStorage = meta.loadStrategy === LoadStrategy.Ephemeral;
     const undoing = direction === "undo";
 
-    // Resolve to (pool op, storage op) per action × direction.
     if (change.action === "U") {
       const values = undoing ? change.before : change.after;
       const model = this.pool.getById(change.modelName, change.modelId);
@@ -969,9 +1028,8 @@ export class TransactionQueue {
   get redoDepth() {
     return this.redoStack.length;
   }
-  /** How many of the undo-stack entries are tracked remote deltas. Lets UIs
-   * surface a dedicated "undo agent/remote edit" affordance alongside the
-   * combined stack. */
+  /** Remote entries currently on the undo stack — lets UIs badge "undo
+   * agent edit" separately from the combined depth. */
   get remoteUndoDepth() {
     return this.undoStack.filter(
       (e) => e.kind === "single" && isRemote(e.item),
