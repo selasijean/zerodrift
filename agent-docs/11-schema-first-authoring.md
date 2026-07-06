@@ -72,6 +72,7 @@ entity({
   name: "Issue",                   // optional — defaults to PascalCase of the schema key
   version: 2,                      // optional — overrides the auto-computed schemaVersion hash
   external: true,                  // optional — coexistence with decorator-defined classes
+  idStrategy: (meta, ctx) => `issue_${nanoid()}`,  // optional — per-entity id minting
   fields: { ... },
 });
 ```
@@ -79,6 +80,8 @@ entity({
 `name` defaults to the PascalCase of the entity's key (`issue` → `Issue`). Override only when you need a registry name that doesn't match the key.
 
 `version` is normally auto-computed by hashing the entity's compiled metadata — if the field set changes, the hash changes, and IDB runs a migration. Set it manually only to force migration without a metadata change.
+
+`idStrategy` mints ids for records of this entity created client-side (`create`, `draft`, `new Model()`); server/IDB-hydrated records keep their existing ids. It has the same `IdentifierFn` signature as the global `advanced.identifierFn` — `(meta, ctx) => string`, with `ctx` the live `StoreManager` context (`setContext` / `<SyncProvider context>`) — and wins over it. Use it to localize per-entity id schemes (Stripe-style prefixes, layer-scoped ids) instead of branching on `meta.name` in one global function; a strategy function can move between the two scopes unchanged. `@ClientModel({ idStrategy })` is the decorator-path equivalent.
 
 ### Field builders
 
@@ -357,6 +360,8 @@ const schema = defineSchema({
 
 `fromZod(zSchema)` returns a `FieldBuilder` for a single Zod schema; `entityFromZod(zObject, opts)` walks `zObject.shape` and produces an `EntityDef`. The adapter handles primitives (`string` / `number` / `boolean` / `date`) plus the `nullable` / `optional` / `default` modifiers; structured Zod types (objects, arrays, enums, unions) collapse to `s.json<T>()` so the runtime stores the raw value while TS types still flow from `z.infer`.
 
+`z.lazy(...)` wrappers — what codegen emits for recursive or forward-referenced schemas — are resolved eagerly, both at entity level (`entityFromZod(z.lazy(() => Shape), …)`) and per field, at runtime and in the inferred types. Field overrides, `autoIndex`, and `IndexedFieldKeys` all see the resolved object, so a lazy-wrapped schema behaves identically to a bare `z.object(...)`.
+
 Zod doesn't carry FK or index metadata, so use `opts.fields` to layer that on per-field — either as a chaining function (modifies the auto-derived builder) or a full replacement (typically for FKs):
 
 ```typescript
@@ -371,7 +376,7 @@ entityFromZod(ZodIssue, {
 });
 ```
 
-Override keys are constrained to fields actually declared on the Zod object, so typos surface at compile time.
+Override keys are constrained to fields actually declared on the Zod object, so typos surface at compile time — and unknown keys also throw at runtime (for JS callers and casts), since a silently-dropped override means a field you believe is indexed isn't.
 
 Two conveniences cut repetition when the Zod source is generated (OpenAPI, gRPC, …):
 

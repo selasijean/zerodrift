@@ -56,6 +56,63 @@ describe("fromZod — primitive mapping", () => {
     expect(builder.meta.nullable).toBe(true);
     expect(builder.meta.default).toBe("hi");
   });
+
+  it("resolves z.lazy wrappers to the inner schema's kind", () => {
+    expect(fromZod(z.lazy(() => z.string())).meta.kind).toBe("string");
+    expect(fromZod(z.lazy(() => z.number().nullable())).meta.nullable).toBe(
+      true,
+    );
+    expect(fromZod(z.lazy(() => z.lazy(() => z.boolean()))).meta.kind).toBe(
+      "boolean",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// entityFromZod — z.lazy sources (codegen emits z.lazy(() => Shape) for
+// recursive / forward-referenced schemas)
+// ---------------------------------------------------------------------------
+
+describe("entityFromZod — z.lazy sources", () => {
+  it("unwraps an entity-level lazy and derives fields from the resolved object", () => {
+    const Block = z.object({ id: z.string(), title: z.string() });
+    const def = entityFromZod(
+      z.lazy(() => Block),
+      { loadStrategy: LoadStrategy.Eager, name: "LazyBlock" },
+    );
+    expect(Object.keys(def.fields)).toEqual(["id", "title"]);
+    expect(def.fields.title.meta.kind).toBe("string");
+  });
+
+  it("flows overrides on a lazy-wrapped extended object into IndexedFieldKeys", () => {
+    const Base = z.object({ id: z.string(), name: z.string() });
+    const LazyExtended = z.lazy(() => Base.extend({ layerId: z.string() }));
+    const schema = defineSchema({
+      entities: {
+        block: entityFromZod(LazyExtended, {
+          loadStrategy: LoadStrategy.Eager,
+          name: "LazyExtendedBlock",
+          fields: { layerId: s.string().indexed() },
+        }),
+      },
+      links: {},
+    });
+    expect(schema.entities.block.fields.layerId.meta.indexed).toBe(true);
+    type IK = IndexedFieldKeys<typeof schema, "block">;
+    expectTypeOf<IK>().toEqualTypeOf<"layerId">();
+    type Block = InferEntity<typeof schema, "block">;
+    expectTypeOf<Block["layerId"]>().toEqualTypeOf<string>();
+  });
+
+  it("throws a clear error when the resolved schema is not an object", () => {
+    expect(() =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      entityFromZod(z.lazy(() => z.string()) as any, {
+        loadStrategy: LoadStrategy.Eager,
+        name: "LazyNotObject",
+      }),
+    ).toThrow(/expected a z\.object/);
+  });
 });
 
 describe("fromZod — TS types", () => {
@@ -474,9 +531,10 @@ describe("entityFromZod — per-field overrides", () => {
     expect(email.indexed).toBe(true);
   });
 
-  // Type-level: typos in the `fields` override map fail to compile. The
-  // exported `EntityFromZodOpts<Z>` form and the call-site inference path
-  // both constrain overrides to Zod object keys.
+  // Typos in the `fields` override map fail to compile (exported
+  // `EntityFromZodOpts<Z>` form and the call-site inference path both
+  // constrain overrides to Zod object keys) AND throw at runtime for JS
+  // callers / casts — an unknown key would otherwise be dropped silently.
   it("constrains override keys to fields actually declared on the Zod object", () => {
     type FieldsArg = NonNullable<
       EntityFromZodOpts<typeof ZodOverridable>["fields"]
@@ -485,13 +543,15 @@ describe("entityFromZod — per-field overrides", () => {
       "id" | "title" | "email" | "teamId" | "draftNote"
     >();
 
-    entityFromZod(ZodOverridable, {
-      loadStrategy: LoadStrategy.Eager,
-      fields: {
-        // @ts-expect-error Error: 'typo' is not a field declared on the Zod object passed to entityFromZod
-        typo: (b) => b.indexed(),
-      },
-    });
+    expect(() =>
+      entityFromZod(ZodOverridable, {
+        loadStrategy: LoadStrategy.Eager,
+        fields: {
+          // @ts-expect-error Error: 'typo' is not a field declared on the Zod object passed to entityFromZod
+          typo: (b) => b.indexed(),
+        },
+      }),
+    ).toThrow(/typo/);
   });
 
   // Type-level: override metadata (.indexed(), refId target, etc.) propagates

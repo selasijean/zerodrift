@@ -15,6 +15,7 @@ export { dateSerializer, dateDeserializer } from "./serializers.js";
 export type {
   PropertyMeta,
   ModelMeta,
+  IdentifierFn,
   FieldTransform,
   PropertyChange,
   CommitIntent,

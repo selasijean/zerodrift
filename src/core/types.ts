@@ -149,7 +149,25 @@ export interface ModelMeta {
   ctor: new () => BaseModel;
   schemaVersion: number;
   eviction?: ModelEvictionConfig;
+  /** Per-entity id mint function (`entity({ idStrategy })` /
+   * `@ClientModel({ idStrategy })`). Wins over the global
+   * `advanced.identifierFn` in `StoreManager.mintId`. Set via
+   * `ModelRegistry.setIdStrategy` so the registry's strategy count
+   * stays accurate. */
+  idStrategy?: IdentifierFn;
 }
+
+/**
+ * Mints an id for a client-side-created record. One shape for both scopes —
+ * the global `advanced.identifierFn` and the per-entity `idStrategy` — so a
+ * strategy can move between them (or be shared across entities) unchanged.
+ * `meta` is the record's model; `context` is the live value last pushed via
+ * `StoreManager.setContext` (`undefined` until set).
+ */
+export type IdentifierFn<TContext = unknown> = (
+  meta: ModelMeta,
+  context: TContext | undefined,
+) => string;
 
 /**
  * Transforms a value at the moment it's assigned via the property setter.

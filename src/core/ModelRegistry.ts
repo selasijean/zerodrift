@@ -12,6 +12,7 @@
 import type { BaseModel } from "./BaseModel.js";
 import { hashString } from "./hash.js";
 import {
+  type IdentifierFn,
   type ModelMeta,
   type PropertyMeta,
   type CoveringPath,
@@ -81,6 +82,28 @@ class ModelRegistryImpl {
     meta.properties.set(propertyName, { ...existing, ...updates });
     this.cachedHash = null;
     this.coveringPathsCache.clear();
+  }
+
+  /** Count of models carrying a per-entity `idStrategy`. Lets
+   * `StoreManager.mintId` skip the meta lookup entirely when neither a
+   * global `identifierFn` nor any per-entity strategy is configured. */
+  private idStrategyCount = 0;
+
+  /** Attach a per-entity id mint function. Wins over the global
+   * `advanced.identifierFn` when `StoreManager.mintId` runs. */
+  setIdStrategy(modelName: string, fn: IdentifierFn) {
+    const meta = this.models.get(modelName);
+    if (meta == null) {
+      throw new Error(`Model "${modelName}" not registered`);
+    }
+    if (meta.idStrategy == null) {
+      this.idStrategyCount++;
+    }
+    meta.idStrategy = fn;
+  }
+
+  get hasIdStrategies(): boolean {
+    return this.idStrategyCount > 0;
   }
 
   registerAction(modelName: string, name: string) {

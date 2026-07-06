@@ -924,3 +924,83 @@ describe("createStore — seed", () => {
     expect(issue.team).toBe(team);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Per-entity idStrategy
+// ---------------------------------------------------------------------------
+
+describe("per-entity idStrategy", () => {
+  it("wins over the global identifierFn; entities without one keep the global", async () => {
+    const schema = defineSchema({
+      entities: {
+        idsIssue: entity({
+          loadStrategy: LoadStrategy.Eager,
+          name: "IdStrategyIssue",
+          idStrategy: (_meta, ctx) =>
+            `issue_${(ctx as { seq: number } | undefined)?.seq ?? 0}`,
+          fields: { id: s.id(), title: s.string().default("") },
+        }),
+        idsTeam: entity({
+          loadStrategy: LoadStrategy.Eager,
+          name: "IdStrategyTeam",
+          fields: { id: s.id(), name: s.string().default("") },
+        }),
+      },
+      links: {},
+    });
+    const local = makeStoreManager({
+      workspaceId: crypto.randomUUID(),
+      storageAdapter: new MemoryAdapter(),
+      bootstrapFetcher: vi.fn().mockResolvedValue({
+        lastSyncId: 0,
+        subscribedSyncGroups: [],
+        models: {},
+      }),
+      identifierFn: (meta) => `global-${meta.name}-${crypto.randomUUID()}`,
+    });
+    try {
+      const store = createStore({ schema, storeManager: local });
+      local.setContext({ seq: 7 });
+
+      const issue = store.idsIssue.create({ title: "t" });
+      expect(issue.id).toBe("issue_7");
+
+      const team = store.idsTeam.create({ name: "n" });
+      expect(team.id).toMatch(/^global-IdStrategyTeam-/);
+    } finally {
+      await local.teardown();
+    }
+  });
+
+  it("does not run for hydrated (server/IDB) records", async () => {
+    const schema = defineSchema({
+      entities: {
+        idsNote: entity({
+          loadStrategy: LoadStrategy.Eager,
+          name: "IdStrategyNote",
+          idStrategy: () => "minted-locally",
+          fields: { id: s.id(), body: s.string().default("") },
+        }),
+      },
+      links: {},
+    });
+    const local = makeStoreManager({
+      workspaceId: crypto.randomUUID(),
+      storageAdapter: new MemoryAdapter(),
+      bootstrapFetcher: vi.fn().mockResolvedValue({
+        lastSyncId: 0,
+        subscribedSyncGroups: [],
+        models: {},
+      }),
+    });
+    try {
+      const store = createStore({ schema, storeManager: local });
+      const [seeded] = store.idsNote.seed([
+        { id: "server-id", body: "from server" },
+      ]);
+      expect(seeded.id).toBe("server-id");
+    } finally {
+      await local.teardown();
+    }
+  });
+});

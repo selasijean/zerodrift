@@ -129,3 +129,30 @@ describe("ModelRegistry", () => {
     });
   });
 });
+
+// ── idStrategy registration ─────────────────────────────────────────────────
+
+describe("setIdStrategy", () => {
+  it("stamps the meta, flips hasIdStrategies, and @ClientModel wires it", async () => {
+    const { ClientModel } = await import("@zerodrift/decorators");
+    const { BaseModel } = await import("@zerodrift/BaseModel");
+
+    @ClientModel({
+      name: "IdStrategyDecorated",
+      loadStrategy: LoadStrategy.Eager,
+      idStrategy: () => "decorated-id",
+    })
+    class Decorated extends BaseModel {}
+    void Decorated;
+
+    const meta = ModelRegistry.getModelMeta("IdStrategyDecorated")!;
+    expect(meta.idStrategy?.(meta, undefined)).toBe("decorated-id");
+    expect(ModelRegistry.hasIdStrategies).toBe(true);
+  });
+
+  it("throws for an unregistered model", () => {
+    expect(() =>
+      ModelRegistry.setIdStrategy("NoSuchModel", () => "x"),
+    ).toThrow(/not registered/);
+  });
+});

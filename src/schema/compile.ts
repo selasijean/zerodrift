@@ -58,6 +58,9 @@ export function compileSchema(schema: SchemaDef): CompiledSchema {
     if (entityDef.version != null) {
       meta.schemaVersion = entityDef.version;
     }
+    if (entityDef.idStrategy != null) {
+      ModelRegistry.setIdStrategy(name, entityDef.idStrategy);
+    }
   }
 
   for (const [key, entityDef] of Object.entries(schema.entities)) {

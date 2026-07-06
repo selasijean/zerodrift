@@ -18,6 +18,7 @@ import React, {
   useSyncExternalStore,
   useLayoutEffect,
 } from "react";
+import { comparer, reaction, untracked } from "mobx";
 import { StoreManager, type StoreManagerConfig } from "../core/StoreManager.js";
 import { BootstrapPhase } from "../core/types.js";
 import { LazyCollectionBase, BackRef } from "../core/LazyCollection.js";
@@ -706,6 +707,135 @@ export function useRelation(
         : (relation as LazyCollectionBase<BaseModel>).reload());
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// useWatch — compiler-safe reactive field reads
+//
+// Pooled records are stable references whose fields update in place, so a
+// render-time read like `issue.title` is only reactive under MobX
+// `observer()` — which the React Compiler breaks silently: auto-memoization
+// keys the dereference on the unchanging `issue` reference, the memoized
+// block never re-executes, and the render-tracking subscription is dropped.
+//
+// useWatch is the compiler-safe boundary: the selector runs inside this hook
+// (library code — excluded from app-level compilation) under a MobX reaction,
+// and the result crosses into the component as a value snapshot whose
+// identity changes exactly when its contents do.
+// ---------------------------------------------------------------------------
+
+export interface UseWatchOptions<T> {
+  /**
+   * Result equality (default: MobX `comparer.shallow`). Equal results keep
+   * the previous snapshot identity — no re-render, no downstream memo
+   * invalidation. Pass `comparer.structural` for deeply-nested selections.
+   */
+  equals?: (previous: T, next: T) => boolean;
+}
+
+/** A read-only box for the latest render's value of a hook argument. */
+interface Latest<T> {
+  readonly current: T;
+}
+
+/**
+ * One selector subscription, shaped for `useSyncExternalStore`: a MobX
+ * reaction feeds a cached snapshot that only changes identity when the
+ * selector result is unequal (per `equals`). `selector`/`equals` are read
+ * through refs so the latest render's closures apply without re-subscribing.
+ */
+function createWatchStore<R, T>(
+  record: R,
+  selectorRef: Latest<(record: R) => T>,
+  equalsRef: Latest<((previous: T, next: T) => boolean) | undefined>,
+) {
+  let cached: T | undefined;
+  let hasValue = false;
+  const absorb = (next: T): boolean => {
+    const equals = equalsRef.current ?? comparer.shallow;
+    if (hasValue && equals(cached as T, next)) {
+      return false;
+    }
+    cached = next;
+    hasValue = true;
+    return true;
+  };
+  return {
+    subscribe: (onChange: () => void) =>
+      reaction(
+        () => selectorRef.current(record),
+        (next) => {
+          if (absorb(next)) {
+            onChange();
+          }
+        },
+        // Catches a change that landed between the render-time snapshot
+        // and the subscription; absorb() dedupes the unchanged case.
+        { fireImmediately: true },
+      ),
+    getSnapshot: (): T => {
+      if (!hasValue) {
+        // untracked: don't leak this read into an enclosing observer() —
+        // the reaction above is the one subscription this store owns.
+        absorb(untracked(() => selectorRef.current(record)));
+      }
+      return cached as T;
+    },
+  };
+}
+
+// Dependency-free fallbacks for useWatch's null-record path — module-level so
+// the subscription identity is stable across renders.
+const emptySubscribe = () => () => {};
+const emptySnapshot = () => undefined;
+
+/**
+ * Subscribe to any reactive reads on a pooled record and return the selected
+ * value. Re-renders when (and only when) the selector's result changes.
+ * The React counterpart of `record.watch(selector, cb)`, and the recommended
+ * way to read record fields in apps compiled with the React Compiler (where
+ * `observer()` render-tracking silently breaks).
+ *
+ *   const { data: issue } = useRecord(store.issue, issueId);
+ *   const title = useWatch(issue, (i) => i.title);
+ *   const badge = useWatch(issue, (i) => ({ title: i.title, done: i.done }));
+ *
+ * The selector must be pure and, like a `useSyncExternalStore` snapshot,
+ * should read a stable set of fields for a given record. It may also range
+ * over an array of records (`useWatch(comments, (list) => …)`) — every field
+ * it touches is tracked.
+ */
+export function useWatch<R extends object, T>(
+  record: R,
+  selector: (record: R) => T,
+  opts?: UseWatchOptions<T>,
+): T;
+export function useWatch<R extends object, T>(
+  record: R | null | undefined,
+  selector: (record: R) => T,
+  opts?: UseWatchOptions<T>,
+): T | undefined;
+export function useWatch<R extends object, T>(
+  record: R | null | undefined,
+  selector: (record: R) => T,
+  opts?: UseWatchOptions<T>,
+): T | undefined {
+  const selectorRef = useRef(selector);
+  selectorRef.current = selector;
+  const equalsRef = useRef(opts?.equals);
+  equalsRef.current = opts?.equals;
+
+  const store = useMemo(
+    () =>
+      record == null ? null : createWatchStore(record, selectorRef, equalsRef),
+    [record],
+  );
+
+  return useSyncExternalStore<T | undefined>(
+    store?.subscribe ?? emptySubscribe,
+    store?.getSnapshot ?? emptySnapshot,
+    store?.getSnapshot ?? emptySnapshot,
+  );
 }
 
 function useStableCallback<TParams extends unknown[], TResult>(
