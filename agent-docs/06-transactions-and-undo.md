@@ -278,6 +278,65 @@ The entry still moves to the opposite stack so the user can retry. Mid-batch han
 
 `UndoableAction`s are **not** cached in IDB. The cached-transaction store exists to resend mutations the server hasn't confirmed; an action's API call has already returned a `changeLogId`, so there's nothing to resend. Like the rest of the undo stack, action entries live in memory only and are lost on reload.
 
+## Undoable remote deltas (`advanced.remoteUndo`)
+
+`runUndoable` covers side-effects *this client* initiated. `remoteUndo` covers the inverse direction: **server-pushed deltas** — e.g. an agent streaming edits into the workspace — that the local user should be able to undo with one keystroke.
+
+```typescript
+new StoreManager({
+  workspaceId,
+  transport: { bootstrapFetcher, syncUrl },
+  advanced: {
+    remoteUndo: {
+      // Which incoming delta actions are user-undoable?
+      evaluate: (ctx) => ctx.data?.actorId === agentId,
+      // Server-side revert, keyed by the packet's syncId. The engine has
+      // already applied the local revert optimistically before this runs.
+      undo: async (action) => {
+        const r = await api.revertSync(action.syncId);
+        return { compensatingSyncId: r.syncId };
+      },
+      redo: async (action) => {
+        const r = await api.reapplySync(action.syncId);
+        return { compensatingSyncId: r.syncId };
+      },
+    },
+  },
+});
+```
+
+### Capture
+
+`SyncConnection` offers every action of an incoming packet to `evaluate` **before** the delta touches IDB or the pool — that's the only moment the pre-delta state (the undo baseline) is still readable. The context carries `{ syncId, action, modelName, modelId, data, previousData }`; `previousData()` lazily serializes the pooled instance (`null` when not pooled) and is only meaningful while `evaluate` runs.
+
+A `true` return captures the inverse as a `RemoteChange`:
+
+| Delta action | Captured inverse |
+|---|---|
+| `"U"` / `"C"` (and `"I"` onto an existing record) | Per-field `before`/`after` maps, restricted to fields the delta actually moves — no-op deltas aren't tracked |
+| `"I"` (fresh) | The inserted record; undo = delete |
+| `"D"` / `"A"` | Full pre-delete snapshot; undo = restore |
+
+All captures from one packet form a **single atomic entry** (a `RemoteUndoAction`, `source: "remote"`) on the same undo stack as model transactions, keyed by the packet's `syncId`.
+
+Two kinds of packets are never offered to `evaluate`:
+- `"V"` actions and any packet whose `syncId` matches an `awaitingSync` transaction — those are echoes of this client's own writes, already undoable as local transactions. (Caveat: if the echo delta outraces the HTTP ACK, the engine can't yet know the syncId is its own — write `evaluate` to identify remote actors, e.g. by an `actorId` field, rather than relying on this filter alone.)
+- Packets whose `syncId` was returned as `compensatingSyncId` by a previous `undo`/`redo` handler call — the engine consumes these one-shot so its own reverts aren't re-tracked.
+
+### Undo / redo semantics
+
+`undo()` of a remote entry is **optimistic-local-first**: revert pool + IDB from the captured inverses (reverse order, full-record write via the pooled instance, read-modify-write when not pooled, IDB skipped for Ephemeral models), *then* call `remoteUndo.undo(action)`. No transaction is enqueued — the server-side revert is entirely the handler's job.
+
+Failure semantics differ deliberately from `undoableActions`: if the handler throws (or `redo` is attempted with no handler configured), the local revert is **rolled forward again** — the server still holds the remote edit and stays the source of truth — the entry **stays on its original stack** for retry, `undo()` returns `null`, and `onError` fires with `kind: "remoteUndo"` (`phase: "evaluate" | "undo" | "redo"`). A permanently failing revert endpoint therefore blocks that entry; there is no skip API yet.
+
+Other behavioral notes:
+- Remote entries never join an open `batch()` (deltas arrive outside any user action) and — unlike user edits — do **not** clear the redo stack.
+- On successful undo the entry moves to the redo stack; `redo` re-applies the delta locally and calls `remoteUndo.redo`.
+- Local reverts don't run cascade deletes; the server's compensating deltas reconcile any children.
+- `TransactionQueue.remoteUndoDepth` (surfaced through `useUndoRedo().remoteUndoDepth` and `StoreManager.status()`) counts remote entries currently on the undo stack, so a UI can badge "N agent edits" independently of `canUndo`.
+- Like `UndoableAction`s, remote entries are memory-only — not cached in IDB, lost on reload.
+- Rebase interplay: if the user has a pending local change on a field the tracked delta also touches, `previousData()` (and the captured `before`) reflect the user's optimistic value — undoing the remote entry won't clobber the user's edit, and the server-side revert rebase-reapplies it as usual.
+
 ## Offline Resilience
 
 Every `enqueue()` call writes the serialized transaction to IDB's `__transactions` store:

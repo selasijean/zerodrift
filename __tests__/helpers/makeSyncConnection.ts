@@ -1,5 +1,6 @@
 import {
   SyncConnection,
+  type DeltaPacket,
   type SSEEndpoint,
   type SyncConnectionOptions,
 } from "@zerodrift/SyncConnection";
@@ -25,4 +26,14 @@ export function makeSyncConnection(
     queue,
     rest,
   );
+}
+
+/** Push a delta packet through the private processDeltaPacket — tests drive
+ *  packets directly to avoid needing a real EventSource. */
+export function processPacket(
+  conn: SyncConnection,
+  packet: DeltaPacket,
+): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return (conn as any).processDeltaPacket(packet);
 }

@@ -24,8 +24,15 @@ import {
   DeleteTransaction,
   ArchiveTransaction,
   type UndoableAction,
+  type RemoteChange,
+  type RemoteUndoAction,
+  type RemoteUndoConfig,
 } from "./Transaction.js";
-import { TransactionState, type PropertyChange } from "./types.js";
+import {
+  LoadStrategy,
+  TransactionState,
+  type PropertyChange,
+} from "./types.js";
 import type { BaseModel } from "./BaseModel.js";
 
 export interface BatchResponse {
@@ -52,7 +59,7 @@ interface CachedTransactionRecord {
   syncIdNeededForCompletion?: number;
 }
 
-type UndoItem = BaseTransaction | UndoableAction;
+type UndoItem = BaseTransaction | UndoableAction | RemoteUndoAction;
 
 type UndoEntry =
   | { kind: "single"; item: UndoItem }
@@ -63,6 +70,8 @@ export type UndoPhase = "undo" | "redo";
 export interface UndoResult {
   txs: BaseTransaction[];
   actions: UndoableAction[];
+  /** Present when the undone/redone entry was a tracked remote delta. */
+  remote?: RemoteUndoAction[];
 }
 
 /** Handlers the consumer supplies via `StoreManagerConfig.undoableActions`.
@@ -77,8 +86,12 @@ export interface UndoableActionHandlers {
 
 type Listener = () => void;
 
+const isRemote = (e: UndoItem): e is RemoteUndoAction =>
+  !(e instanceof BaseTransaction) &&
+  (e as RemoteUndoAction).source === "remote";
+
 const isAction = (e: UndoItem): e is UndoableAction =>
-  !(e instanceof BaseTransaction);
+  !(e instanceof BaseTransaction) && !isRemote(e);
 
 export class TransactionQueue {
   private database: StorageAdapter;
@@ -101,6 +114,14 @@ export class TransactionQueue {
   private activeBatchEntries: (BaseTransaction | UndoableAction)[] = [];
 
   private actionHandlers: UndoableActionHandlers | null = null;
+  private remoteUndoHandlers: Pick<RemoteUndoConfig, "undo" | "redo"> | null =
+    null;
+
+  /** SyncIds of server-side reverts we submitted via `remoteUndo.undo`/`redo`
+   * (as reported back by the handler). When the compensating delta echoes
+   * over SSE, `isOwnSyncId` consumes the entry so it isn't re-evaluated as a
+   * fresh remote edit. */
+  private ownCompensationSyncIds = new Set<number>();
 
   // When true, enqueue() and endBatch() skip undo stack mutations.
   // Set during undo/redo so their inverse operations don't re-enter the stack.
@@ -133,6 +154,44 @@ export class TransactionQueue {
 
   setActionHandlers(handlers: UndoableActionHandlers) {
     this.actionHandlers = handlers;
+  }
+
+  setRemoteUndoHandlers(handlers: Pick<RemoteUndoConfig, "undo" | "redo">) {
+    this.remoteUndoHandlers = handlers;
+  }
+
+  /** True when a delta packet with this syncId is this client's own doing —
+   * either the echo of a write we're awaiting, or the compensating delta of
+   * a remote undo/redo we submitted. SyncConnection gates remote-undo
+   * capture on this so our own round-trips never enter the undo stack. */
+  isOwnSyncId(syncId: number): boolean {
+    if (this.ownCompensationSyncIds.delete(syncId)) {
+      return true;
+    }
+    return this.awaitingSync.some(
+      (tx) => tx.syncIdNeededForCompletion === syncId,
+    );
+  }
+
+  /** Push an entry onto the undo stack, enforcing the depth limit. New user
+   * edits clear the redo stack (standard undo semantics); remote entries
+   * arrive unprompted and pass `keepRedo` to preserve it. */
+  private pushUndoEntry(entry: UndoEntry, opts?: { keepRedo?: boolean }) {
+    this.undoStack.push(entry);
+    if (this.undoStack.length > this.undoLimit) {
+      this.undoStack.shift();
+    }
+    if (opts?.keepRedo !== true) {
+      this.redoStack = [];
+    }
+    this.notify();
+  }
+
+  /** Record a tracked remote delta as a single undoable entry. Deltas arrive
+   * outside any user action, so this never joins an open batch and — unlike
+   * user edits — doesn't clear the redo stack. */
+  recordRemoteEntry(action: RemoteUndoAction) {
+    this.pushUndoEntry({ kind: "single", item: action }, { keepRedo: true });
   }
 
   subscribe(listener: Listener): () => void {
@@ -176,16 +235,11 @@ export class TransactionQueue {
       return;
     }
     if (this.activeBatchEntries.length > 0 && !this.suppressUndoStack) {
-      this.undoStack.push({
+      this.pushUndoEntry({
         kind: "batch",
         batchId,
         entries: [...this.activeBatchEntries],
       });
-      if (this.undoStack.length > this.undoLimit) {
-        this.undoStack.shift();
-      }
-      this.redoStack = [];
-      this.notify();
     }
     this.activeBatchId = null;
     this.activeBatchEntries = [];
@@ -239,12 +293,7 @@ export class TransactionQueue {
     if (this.suppressUndoStack) {
       return;
     }
-    this.undoStack.push({ kind: "single", item: action });
-    if (this.undoStack.length > this.undoLimit) {
-      this.undoStack.shift();
-    }
-    this.redoStack = [];
-    this.notify();
+    this.pushUndoEntry({ kind: "single", item: action });
   }
 
   async enqueueArchive(model: BaseModel) {
@@ -268,12 +317,7 @@ export class TransactionQueue {
       tx.batchId = this.activeBatchId;
       this.activeBatchEntries.push(tx);
     } else if (!this.suppressUndoStack) {
-      this.undoStack.push({ kind: "single", item: tx });
-      if (this.undoStack.length > this.undoLimit) {
-        this.undoStack.shift();
-      }
-      this.redoStack = [];
-      this.notify();
+      this.pushUndoEntry({ kind: "single", item: tx });
     }
 
     // Add to pending and schedule flush synchronously so callers can immediately
@@ -546,9 +590,148 @@ export class TransactionQueue {
     }
   }
 
+  // ── Remote-delta undo (tracked via `remoteUndo.evaluate`) ────────────────
+
+  /** Apply one captured remote change locally. `"undo"` restores the
+   *  pre-delta state, `"redo"` re-applies the delta. Writes go to both the
+   *  pool and the storage adapter (skipped for Ephemeral models) but never
+   *  through the transaction sender — the server-side revert is the
+   *  consumer's `remoteUndo` handler, keyed by syncId. */
+  private async applyRemoteChange(change: RemoteChange, direction: UndoPhase) {
+    const meta = ModelRegistry.getModelMeta(change.modelName);
+    if (meta == null) {
+      return;
+    }
+    const skipStorage = meta.loadStrategy === LoadStrategy.Ephemeral;
+    const undoing = direction === "undo";
+
+    // Resolve to (pool op, storage op) per action × direction.
+    if (change.action === "U") {
+      const values = undoing ? change.before : change.after;
+      const model = this.pool.getById(change.modelName, change.modelId);
+      if (model != null) {
+        model.hydrate(values);
+        this.pool.put(change.modelName, model);
+        if (!skipStorage) {
+          // The pooled instance is authoritative — persist its full record
+          // rather than merging fields into whatever IDB holds.
+          await this.database.writeModels(change.modelName, [
+            model.serialize(),
+          ]);
+        }
+      } else if (!skipStorage) {
+        // Not pooled: read-modify-write so untouched fields survive.
+        const record = await this.database.readModel(
+          change.modelName,
+          change.modelId,
+        );
+        if (record != null) {
+          await this.database.writeModels(change.modelName, [
+            { ...record, ...values },
+          ]);
+        }
+      }
+    } else if (change.action === "I") {
+      if (undoing) {
+        this.pool.remove(change.modelName, change.modelId);
+        if (!skipStorage) {
+          await this.database.deleteModel(change.modelName, change.modelId);
+        }
+      } else {
+        this.pool.hydrateAndPut(change.modelName, meta, change.data);
+        if (!skipStorage) {
+          await this.database.writeModels(change.modelName, [change.data]);
+        }
+      }
+    } else {
+      // "D" | "A" — undo restores the snapshot, redo removes again.
+      if (undoing) {
+        this.pool.hydrateAndPut(change.modelName, meta, change.snapshot);
+        if (!skipStorage) {
+          await this.database.writeModels(change.modelName, [change.snapshot]);
+        }
+      } else {
+        this.pool.remove(change.modelName, change.modelId);
+        if (!skipStorage) {
+          await this.database.deleteModel(change.modelName, change.modelId);
+        }
+      }
+    }
+  }
+
+  /** Undo/redo a tracked remote delta: optimistically apply the local
+   *  inverse (or replay), submit the server-side revert via the consumer's
+   *  handler, then place the entry — success moves it to the opposite
+   *  stack; failure (or a missing handler) restores local state to match
+   *  the server and keeps the entry on its original stack for retry. */
+  private async processRemoteEntry(
+    item: RemoteUndoAction,
+    phase: UndoPhase,
+  ): Promise<UndoResult | null> {
+    const [origin, opposite] =
+      phase === "undo"
+        ? [this.undoStack, this.redoStack]
+        : [this.redoStack, this.undoStack];
+    const finish = (ok: boolean) => {
+      (ok ? opposite : origin).push({ kind: "single", item });
+      this.notify();
+      return ok ? { txs: [], actions: [], remote: [item] } : null;
+    };
+
+    const ctx: EngineErrorContext = {
+      kind: "remoteUndo",
+      phase,
+      syncId: item.syncId,
+    };
+    const handler = this.remoteUndoHandlers?.[phase];
+    if (handler == null) {
+      this.reportError?.(
+        new Error(`No ${phase} handler configured for remote undo`),
+        ctx,
+      );
+      return finish(false);
+    }
+
+    // Local first (optimistic). Undo walks the packet's actions in reverse.
+    const forward =
+      phase === "undo" ? [...item.changes].reverse() : item.changes;
+
+    try {
+      for (const change of forward) {
+        await this.applyRemoteChange(change, phase);
+      }
+      const result = await handler(item);
+      const compensating = result?.compensatingSyncId;
+      if (compensating != null) {
+        this.ownCompensationSyncIds.add(compensating);
+      }
+      return finish(true);
+    } catch (err) {
+      // Server still holds the remote edit — roll the optimistic apply back
+      // so local state doesn't diverge from the source of truth. Changes are
+      // absolute value-writes, so rolling back ones that never applied just
+      // rewrites the current state (idempotent). The rollback is itself
+      // best-effort: if storage is down it can't succeed either, and the
+      // entry must still land back on its stack rather than be lost.
+      const rollbackPhase: UndoPhase = phase === "undo" ? "redo" : "undo";
+      try {
+        for (const change of [...forward].reverse()) {
+          await this.applyRemoteChange(change, rollbackPhase);
+        }
+      } catch {
+        // Reported below via the original error; the next delta for the
+        // affected models reconciles pool + storage with the server.
+      }
+      this.reportError?.(toError(err), ctx);
+      return finish(false);
+    }
+  }
+
   /** Walk an entry's items in `direction`, applying tx reverts/replays and
    *  delegating actions to the consumer's handler. Returns the compensating
-   *  items for the opposite stack, in original insertion order. */
+   *  items for the opposite stack, in original insertion order. Remote
+   *  entries never reach this method — they're always `single` and
+   *  dispatched to `processRemoteEntry` from undo()/redo() directly. */
   private async processEntry(
     entry: UndoEntry,
     direction: UndoPhase,
@@ -569,10 +752,10 @@ export class TransactionQueue {
         i += order
       ) {
         const item = items[i];
-        if (isAction(item)) {
-          swaps.set(item, await this.invokeActionHandler(item, direction));
-        } else {
+        if (item instanceof BaseTransaction) {
           await apply.call(this, item);
+        } else if (isAction(item)) {
+          swaps.set(item, await this.invokeActionHandler(item, direction));
         }
       }
     } finally {
@@ -589,7 +772,7 @@ export class TransactionQueue {
     for (const x of items) {
       if (isAction(x)) {
         actions.push(x);
-      } else {
+      } else if (!isRemote(x)) {
         txs.push(x);
       }
     }
@@ -601,6 +784,9 @@ export class TransactionQueue {
     if (entry == null) {
       return null;
     }
+    if (entry.kind === "single" && isRemote(entry.item)) {
+      return this.processRemoteEntry(entry.item, "undo");
+    }
     const replayed = await this.processEntry(entry, "undo");
     this.redoStack.push(this.wrapEntry(entry, replayed));
     this.notify();
@@ -611,6 +797,9 @@ export class TransactionQueue {
     const entry = this.redoStack.pop();
     if (entry == null) {
       return null;
+    }
+    if (entry.kind === "single" && isRemote(entry.item)) {
+      return this.processRemoteEntry(entry.item, "redo");
     }
     const replayed = await this.processEntry(entry, "redo");
     this.undoStack.push(this.wrapEntry(entry, replayed));
@@ -779,5 +968,13 @@ export class TransactionQueue {
   }
   get redoDepth() {
     return this.redoStack.length;
+  }
+  /** How many of the undo-stack entries are tracked remote deltas. Lets UIs
+   * surface a dedicated "undo agent/remote edit" affordance alongside the
+   * combined stack. */
+  get remoteUndoDepth() {
+    return this.undoStack.filter(
+      (e) => e.kind === "single" && isRemote(e.item),
+    ).length;
   }
 }

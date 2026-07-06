@@ -18,12 +18,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { makeStoreManager } from "./helpers/storeManager";
 import { StoreManager } from "@zerodrift/StoreManager";
-import {
-  SyncConnection,
-  type SSEClient,
-  type SSEClientFactory,
+import type {
+  SSEClient,
+  SSEClientFactory,
 } from "@zerodrift/SyncConnection";
-import { makeSyncConnection } from "./helpers/makeSyncConnection";
+import {
+  makeSyncConnection,
+  processPacket as pushPacket,
+} from "./helpers/makeSyncConnection";
 import { BaseModel } from "@zerodrift/BaseModel";
 import { Database, type StorageAdapter } from "@zerodrift/Database";
 import { MemoryAdapter } from "@zerodrift/MemoryAdapter";
@@ -73,11 +75,6 @@ function recordingSSEFactory(): { factory: SSEClientFactory; calls: string[] } {
   };
   return { factory, calls };
 }
-
-// Push a delta packet directly into a SyncConnection (bypasses EventSource).
-const pushPacket = (conn: SyncConnection, packet: DeltaPacket) =>
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (conn as any).processDeltaPacket(packet);
 
 // ── fixtures ──────────────────────────────────────────────────────────────────
 

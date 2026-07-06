@@ -20,7 +20,7 @@ The design is inspired by Linear's sync engine; see [Acknowledgments](#acknowled
 - **Relationships that stay live**: references, inverse collections, owned collections, and indexed lookups update as records hydrate, load lazily, or arrive over SSE.
 - **Schema or class models**: use decorators (`@ClientModel`, `@Property`, `@Reference`) or schema-as-data (`defineSchema(...)`, `entityFromZod(...)`) without `reflect-metadata`.
 - **Memory you can shape**: choose per-model `LoadStrategy` values for eager data, lazy tables, partial index-backed loading, local-only records, or ephemeral SSE-fed state. Declarative eviction policies cap pool size and auto-evict when sync groups change.
-- **Undo/redo built into the transaction layer**: track field-level changes, group atomic multi-model edits, and include custom remote actions in the same undo stack.
+- **Undo/redo built into the transaction layer**: track field-level changes, group atomic multi-model edits, and include custom remote actions in the same undo stack. Server-pushed deltas (e.g. an agent's streamed edits) can opt into the stack too via `advanced.remoteUndo` — undo reverts locally first, then submits the server-side revert by syncId.
 - **React, browser, or headless Node**: use `<SyncProvider>` and typed hooks in React, or run `StoreManager` directly in agents, workers, CLIs, and tests.
 - **Your backend, your stack**: implement three HTTP endpoints in any language, with a reference Go backend and Next.js demo included.
 
@@ -297,7 +297,8 @@ batch(() => {
   issue.save();
 });
 
-const { undo, redo, canUndo, canRedo } = useUndoRedo();
+// remoteUndoDepth counts tracked remote deltas (advanced.remoteUndo) on the stack
+const { undo, redo, canUndo, canRedo, remoteUndoDepth } = useUndoRedo();
 ```
 
 Schema-authored stores pass the namespace as the handle — same hooks, typed

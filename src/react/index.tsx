@@ -589,7 +589,11 @@ export function useBatch(): StoreManager["batch"] {
 
 export function useUndoRedo() {
   const { sm } = useSyncEngine();
-  const snapshotRef = useRef({ undoDepth: 0, redoDepth: 0 });
+  const snapshotRef = useRef({
+    undoDepth: 0,
+    redoDepth: 0,
+    remoteUndoDepth: 0,
+  });
   const subscribe = useCallback(
     (onStoreChange: () => void) => sm.transactionQueue.subscribe(onStoreChange),
     [sm],
@@ -597,15 +601,17 @@ export function useUndoRedo() {
   const getSnapshot = useCallback(() => {
     const undoDepth = sm.transactionQueue.undoDepth;
     const redoDepth = sm.transactionQueue.redoDepth;
+    const remoteUndoDepth = sm.transactionQueue.remoteUndoDepth;
     if (
       snapshotRef.current.undoDepth !== undoDepth ||
-      snapshotRef.current.redoDepth !== redoDepth
+      snapshotRef.current.redoDepth !== redoDepth ||
+      snapshotRef.current.remoteUndoDepth !== remoteUndoDepth
     ) {
-      snapshotRef.current = { undoDepth, redoDepth };
+      snapshotRef.current = { undoDepth, redoDepth, remoteUndoDepth };
     }
     return snapshotRef.current;
   }, [sm]);
-  const { undoDepth, redoDepth } = useSyncExternalStore(
+  const { undoDepth, redoDepth, remoteUndoDepth } = useSyncExternalStore(
     subscribe,
     getSnapshot,
     getSnapshot,
@@ -616,6 +622,9 @@ export function useUndoRedo() {
     redo: useCallback(() => sm.redo(), [sm]),
     canUndo: undoDepth > 0,
     canRedo: redoDepth > 0,
+    /** Tracked remote deltas (`advanced.remoteUndo`) currently on the undo
+     * stack — e.g. to badge an "undo agent edit" affordance. */
+    remoteUndoDepth,
   };
 }
 
