@@ -215,7 +215,7 @@ inverse-link machinery (see [10-inverse-links-and-reactivity.md](./10-inverse-li
 ## useUndoRedo
 
 ```typescript
-const { undo, redo, canUndo, canRedo } = useUndoRedo();
+const { undo, redo, canUndo, canRedo, remoteUndoDepth } = useUndoRedo();
 ```
 
 Exposes the undo/redo stack. `canUndo` and `canRedo` are reactive — they update when the stack changes. Useful for toolbar buttons.
@@ -224,6 +224,8 @@ Exposes the undo/redo stack. `canUndo` and `canRedo` are reactive — they updat
 <button onClick={undo} disabled={!canUndo}>Undo</button>
 <button onClick={redo} disabled={!canRedo}>Redo</button>
 ```
+
+`remoteUndoDepth` (also reactive) counts tracked remote deltas — server-pushed edits captured via `advanced.remoteUndo`, see [06-transactions-and-undo.md](./06-transactions-and-undo.md#undoable-remote-deltas-advancedremoteundo) — currently on the undo stack. Use it to badge a dedicated "undo agent edit" affordance; `undo()` itself pops the combined stack in order.
 
 ## Observation Tracking for Eviction Safety
 

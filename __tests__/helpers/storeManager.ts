@@ -64,6 +64,7 @@ function toGrouped<T>(f: NormalizedConfig<T>): StoreManagerConfig<T> {
       routeCommit: f.routeCommit,
       onModelTouched: f.onModelTouched,
       undoableActions: f.undoableActions,
+      remoteUndo: f.remoteUndo,
     },
     eviction: f.eviction,
   };

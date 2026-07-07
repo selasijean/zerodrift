@@ -76,7 +76,14 @@ export type {
 } from "./StoreManager.js";
 
 // ── Transactions & undo (config / runUndoable surface) ─────────────────────
-export type { UndoableAction } from "./Transaction.js";
+export type {
+  UndoableAction,
+  RemoteChange,
+  RemoteUndoAction,
+  RemoteUndoContext,
+  RemoteUndoConfig,
+  RemoteUndoHandlerResult,
+} from "./Transaction.js";
 export type {
   TransactionSender,
   BatchResponse,

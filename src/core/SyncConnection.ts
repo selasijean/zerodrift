@@ -26,7 +26,13 @@ import type { StorageAdapter } from "./Database.js";
 import { ObjectPool } from "./ObjectPool.js";
 import { ModelRegistry } from "./ModelRegistry.js";
 import { TransactionQueue } from "./TransactionQueue.js";
-import { LoadStrategy, PropertyType, type ModelMeta } from "./types.js";
+import {
+  LoadStrategy,
+  PropertyType,
+  toError,
+  type ModelMeta,
+} from "./types.js";
+import type { RemoteChange, RemoteUndoConfig } from "./Transaction.js";
 import {
   BaseSSEConnection,
   type SSEClientFactory,
@@ -112,6 +118,14 @@ export interface SyncConnectionOptions {
    * fetch is in flight. The implementation is expected to be a cheap no-op
    * when no fetch is pending. */
   recordInflightDelete?: (modelName: string, id: string) => void;
+  /** When set, every action of every delta packet — except packets the
+   * engine provably owns (awaited write ACKs, undo compensations) — is
+   * offered to this evaluator; a `true` return captures the pre-delta state
+   * and records the packet on the undo stack as a `RemoteUndoAction`.
+   * Echo detection beyond the engine's own gate (e.g. by an actor/user id
+   * the server puts in `data`) is the evaluator's job. Wired from
+   * `advanced.remoteUndo.evaluate`. */
+  remoteUndoEvaluate?: RemoteUndoConfig["evaluate"];
 }
 
 export class SyncConnection extends BaseSSEConnection {
@@ -137,6 +151,8 @@ export class SyncConnection extends BaseSSEConnection {
    * gate, which doesn't see `getOrLoadAll`'s sentinel coverage. */
   private isModelFullyLoaded?: (modelName: string) => boolean;
   private recordInflightDelete?: (modelName: string, id: string) => void;
+  private remoteUndoEvaluate?: RemoteUndoConfig["evaluate"];
+  private reportEngineError?: SSEErrorReporter;
 
   constructor(
     url: SSEEndpoint,
@@ -152,6 +168,8 @@ export class SyncConnection extends BaseSSEConnection {
     this.transform = opts.transform;
     this.isModelFullyLoaded = opts.isModelFullyLoaded;
     this.recordInflightDelete = opts.recordInflightDelete;
+    this.remoteUndoEvaluate = opts.remoteUndoEvaluate;
+    this.reportEngineError = opts.reportError;
   }
 
   protected buildUrl(): string {
@@ -251,6 +269,32 @@ export class SyncConnection extends BaseSSEConnection {
     // Stale packets (syncId <= lastSyncId): these actions would clobber newer pool state.
     const advanced = packet.syncId > meta.lastSyncId;
     if (advanced) {
+      // Step 1b: remote-undo capture. Must run before the IDB writes below —
+      // the pre-delta state (the undo baseline) is only readable until then.
+      // Own round-trips (write echoes, undo compensations) are excluded.
+      if (
+        this.remoteUndoEvaluate != null &&
+        !this.queue.isOwnSyncId(packet.syncId)
+      ) {
+        const capturedActions = await this.captureRemoteUndo(packet);
+
+        // Step 1c: supersession rebase. Foreign UNTRACKED edits will never
+        // be unwound through the undo stack, so any tracked entry field they
+        // overwrite must stop reverting locally. Captured actions are
+        // exempt — LIFO undo keeps their chains coherent — and own packets
+        // never reach this branch.
+        for (const action of packet.syncActions) {
+          if (action.data == null || capturedActions.has(action)) {
+            continue;
+          }
+          this.queue.rebaseRemoteEntries(
+            action.modelName,
+            action.modelId,
+            action.data,
+          );
+        }
+      }
+
       // Step 2: apply to IndexedDB (server is SSOT — IDB mirrors it)
       for (const action of packet.syncActions) {
         const actionMeta = ModelRegistry.getModelMeta(action.modelName);
@@ -317,6 +361,139 @@ export class SyncConnection extends BaseSSEConnection {
     }
 
     this.onPacket?.(packet);
+  }
+
+  // =========================================================================
+  // Remote-undo capture (before the packet is applied anywhere)
+  // =========================================================================
+
+  /** Offer each action to the consumer's evaluator and capture the inverse
+   *  of every accepted one. All captures from one packet form a single
+   *  atomic undo entry keyed by the packet's syncId. Captures are pure
+   *  pre-state reads, so they run concurrently; Promise.all keeps the
+   *  captured order aligned with the packet's action order.
+   *
+   *  Best-effort: a failure here (e.g. an IDB read rejecting mid-teardown)
+   *  is reported and swallowed — it must never abort delta application or
+   *  stall the sequential packet queue.
+   *
+   *  Returns the actions that produced a capture so the caller's
+   *  supersession pass can exempt them. */
+  private async captureRemoteUndo(
+    packet: DeltaPacket,
+  ): Promise<Set<SyncAction>> {
+    const capturedActions = new Set<SyncAction>();
+    try {
+      const results = await Promise.all(
+        packet.syncActions.map((action) =>
+          this.captureRemoteChange(packet.syncId, action),
+        ),
+      );
+      const captured: RemoteChange[] = [];
+      results.forEach((change, i) => {
+        if (change != null) {
+          captured.push(change);
+          capturedActions.add(packet.syncActions[i]);
+        }
+      });
+      if (captured.length > 0) {
+        this.queue.recordRemoteEntry({
+          source: "remote",
+          id: crypto.randomUUID(),
+          syncId: packet.syncId,
+          changes: captured,
+          timestamp: Date.now(),
+        });
+      }
+    } catch (err) {
+      this.reportEngineError?.(toError(err), {
+        kind: "remoteUndo",
+        phase: "evaluate",
+        syncId: packet.syncId,
+      });
+    }
+    return capturedActions;
+  }
+
+  private async captureRemoteChange(
+    syncId: number,
+    action: SyncAction,
+  ): Promise<RemoteChange | null> {
+    if (ModelRegistry.getModelMeta(action.modelName) == null) {
+      return null;
+    }
+    const { modelName, modelId } = action;
+    const pooled = this.pool.getById(modelName, modelId);
+    let previous: Record<string, unknown> | null = null;
+    const previousData = () => {
+      previous ??= pooled?.serialize() ?? null;
+      return previous;
+    };
+
+    let tracked: boolean;
+    try {
+      tracked = this.remoteUndoEvaluate!({
+        syncId,
+        action: action.action,
+        modelName,
+        modelId,
+        data: action.data,
+        previousData,
+      });
+    } catch (err) {
+      this.reportEngineError?.(toError(err), {
+        kind: "remoteUndo",
+        phase: "evaluate",
+        syncId,
+      });
+      return null;
+    }
+    if (!tracked) {
+      return null;
+    }
+
+    // Baseline: the pooled instance, else the not-yet-overwritten IDB record.
+    previousData();
+    if (previous == null) {
+      previous = await this.database.readModel(modelName, modelId);
+    }
+
+    if (action.action === "D" || action.action === "A") {
+      // Nothing local to restore → nothing locally undoable.
+      return previous == null
+        ? null
+        : { action: action.action, modelName, modelId, snapshot: previous };
+    }
+
+    if (action.data == null) {
+      return null;
+    }
+    if (previous == null && action.action === "I") {
+      return {
+        action: "I",
+        modelName,
+        modelId,
+        data: { id: modelId, ...action.data },
+      };
+    }
+    // Any other data-bearing action — including "I" onto an existing
+    // record — applies as a field merge; capture only the fields it moves.
+    const before: Record<string, unknown> = {};
+    const after: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(action.data)) {
+      if (key === "id") {
+        continue;
+      }
+      const prior = previous?.[key];
+      if (!Object.is(prior, value)) {
+        before[key] = prior;
+        after[key] = value;
+      }
+    }
+    if (Object.keys(after).length === 0) {
+      return null;
+    }
+    return { action: "U", modelName, modelId, before, after };
   }
 
   // =========================================================================

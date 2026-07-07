@@ -40,7 +40,7 @@ import {
   type TransactionSender,
   type UndoableActionHandlers,
 } from "./TransactionQueue.js";
-import type { UndoableAction } from "./Transaction.js";
+import type { RemoteUndoConfig, UndoableAction } from "./Transaction.js";
 import {
   SyncConnection,
   encodeCsvList,
@@ -352,6 +352,22 @@ export interface AdvancedConfig<TContext = unknown> {
    * `onError` with `kind: "undoableAction"`.
    */
   undoableActions?: UndoableActionHandlers;
+  /**
+   * Track selected server-pushed deltas (e.g. an agent's streamed edits) as
+   * user-undoable. `evaluate` runs for every incoming sync action except
+   * packets the engine provably owns (awaited write ACKs, undo
+   * compensations); telling any other echo apart from a remote edit — e.g.
+   * by an actor id the server includes in the delta — is the evaluator's
+   * job. A `true` return captures the pre-delta state on the undo stack
+   * (one atomic entry per packet).
+   * `undo()` then reverts pool + storage optimistically and calls
+   * `remoteUndo.undo(action)` to revert server-side by `action.syncId`; if
+   * the handler throws, the local revert is rolled forward again and the
+   * entry stays on the undo stack for retry. Handlers may return
+   * `{ compensatingSyncId }` so the compensation's own SSE echo isn't
+   * re-tracked. Failures route to `onError` with `kind: "remoteUndo"`.
+   */
+  remoteUndo?: RemoteUndoConfig;
 }
 
 export interface EvictionConfig {
@@ -439,6 +455,7 @@ export function normalizeConfig<TContext = unknown>(
     routeCommit: c.advanced?.routeCommit,
     onModelTouched: c.advanced?.onModelTouched,
     undoableActions: c.advanced?.undoableActions,
+    remoteUndo: c.advanced?.remoteUndo,
     eviction: c.eviction,
   };
 }
@@ -545,6 +562,9 @@ export class StoreManager<TContext = unknown> {
     );
     if (c.undoableActions != null) {
       this.transactionQueue.setActionHandlers(c.undoableActions);
+    }
+    if (c.remoteUndo != null) {
+      this.transactionQueue.setRemoteUndoHandlers(c.remoteUndo);
     }
     if (c.onDemandIndexBatchFetcher != null) {
       const fetcher =
@@ -792,6 +812,7 @@ export class StoreManager<TContext = unknown> {
             reportError: sseErrorReporter,
             isModelFullyLoaded: this.isModelFullyLoaded.bind(this),
             recordInflightDelete: this.recordInflightDelete.bind(this),
+            remoteUndoEvaluate: this.config.remoteUndo?.evaluate,
           },
         );
         this.syncConnection.connect();
@@ -3225,6 +3246,7 @@ export class StoreManager<TContext = unknown> {
       pending: this.transactionQueue.pendingCount,
       undoDepth: this.transactionQueue.undoDepth,
       redoDepth: this.transactionQueue.redoDepth,
+      remoteUndoDepth: this.transactionQueue.remoteUndoDepth,
       syncConnected: this.syncConnection?.isConnected ?? false,
       lastSyncId: this.database.currentMeta?.lastSyncId ?? 0,
     };

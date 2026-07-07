@@ -1,5 +1,6 @@
 import {
   SyncConnection,
+  type DeltaPacket,
   type SSEEndpoint,
   type SyncConnectionOptions,
 } from "@zerodrift/SyncConnection";
@@ -25,4 +26,16 @@ export function makeSyncConnection(
     queue,
     rest,
   );
+}
+
+/** Push a delta packet through the private processDeltaPacket — tests drive
+ *  packets directly to avoid needing a real EventSource. Element access is
+ *  TypeScript's sanctioned loophole for `private` visibility: unlike an
+ *  `any` cast, the signature stays fully checked, so a rename or parameter
+ *  change breaks at compile time. */
+export function processPacket(
+  conn: SyncConnection,
+  packet: DeltaPacket,
+): Promise<void> {
+  return conn["processDeltaPacket"](packet);
 }

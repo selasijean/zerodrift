@@ -355,6 +355,11 @@ export type EngineErrorContext =
       actionType?: string;
     }
   | {
+      kind: "remoteUndo";
+      phase: "evaluate" | "undo" | "redo";
+      syncId: number;
+    }
+  | {
       kind: "beforeCommit";
       opKind: "create" | "update";
       modelName: string;

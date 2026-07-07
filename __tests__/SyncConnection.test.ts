@@ -14,12 +14,10 @@ import {
   makeFactory,
   sendMessage,
 } from "./helpers/sseClient";
-import { makeSyncConnection } from "./helpers/makeSyncConnection";
-
-// We test processDeltaPacket directly (private) to avoid needing a real EventSource.
-const process = (conn: SyncConnection, packet: DeltaPacket) =>
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (conn as any).processDeltaPacket(packet);
+import {
+  makeSyncConnection,
+  processPacket as process,
+} from "./helpers/makeSyncConnection";
 
 let db: Database;
 let pool: ObjectPool;
