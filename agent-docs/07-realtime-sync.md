@@ -86,7 +86,7 @@ If the packet adds or removes sync groups, update `__meta.subscribedSyncGroups` 
 **Step 2–3: (internal bookkeeping)**
 
 **Step 3b: Remote-undo capture (opt-in)**
-When `advanced.remoteUndo` is configured, each action (except own-write echoes and `"V"` confirmations) is offered to the consumer's `evaluate`; accepted actions capture their pre-delta state onto the undo stack as one atomic entry per packet. This must happen **before** the IDB write below — that write destroys the undo baseline. See [06-transactions-and-undo.md](./06-transactions-and-undo.md#undoable-remote-deltas-advancedremoteundo).
+When `advanced.remoteUndo` is configured, each action (except own-write echoes and `"V"` confirmations) is offered to the consumer's `evaluate`; accepted actions capture their pre-delta state onto the undo stack as one atomic entry per packet. This must happen **before** the IDB write below — that write destroys the undo baseline. Actions that were *not* captured then run a supersession pass over existing remote entries, pruning any tracked field the foreign edit overwrote so stale values can't resurface through undo. See [06-transactions-and-undo.md](./06-transactions-and-undo.md#undoable-remote-deltas-advancedremoteundo) for both mechanisms.
 
 **Step 4: Write to IndexedDB**
 Before touching the in-memory pool, persist every action to IDB. This ensures durability — if the tab crashes after this point, the data is on disk.
