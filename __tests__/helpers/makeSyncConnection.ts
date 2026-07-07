@@ -29,11 +29,13 @@ export function makeSyncConnection(
 }
 
 /** Push a delta packet through the private processDeltaPacket — tests drive
- *  packets directly to avoid needing a real EventSource. */
+ *  packets directly to avoid needing a real EventSource. Element access is
+ *  TypeScript's sanctioned loophole for `private` visibility: unlike an
+ *  `any` cast, the signature stays fully checked, so a rename or parameter
+ *  change breaks at compile time. */
 export function processPacket(
   conn: SyncConnection,
   packet: DeltaPacket,
 ): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (conn as any).processDeltaPacket(packet);
+  return conn["processDeltaPacket"](packet);
 }
