@@ -244,6 +244,10 @@ store.atomic(() => {
 // overlapping operations never collide. On resolve, only the fields mutate
 // touched commit (one undo entry); on reject, they revert (field-level
 // last-writer-wins on overlap). Don't await I/O inside atomic() — use this.
+// mutate MUST be sync: resolve lazy records with `await store.issue.draft(id)`
+// FIRST, then mutate the pooled reference. See 06-transactions-and-undo.md
+// (#editing-lazy-loaded-records-inside-mutate-no-await-allowed).
+const issue = await store.issue.draft(id);   // pool → IDB → on-demand, once
 await store.optimistic(
   () => issue.assign({ status: "done" }),
   () => api.call(),

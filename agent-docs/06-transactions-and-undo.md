@@ -183,6 +183,38 @@ Conflict policy on overlap is field-level last-writer-wins, mirroring SSE rebasi
 
 Use `optimistic()` instead of awaiting I/O inside `atomic()`: the atomic scope is process-global, and holding it across a round-trip both throws on a second `atomic()` and sweeps unrelated concurrent writes into the scope.
 
+### Editing lazy-loaded records inside `mutate` (no `await` allowed)
+
+`mutate` **must be synchronous** — `optimistic()` calls it as `mutate()` (never `await mutate()`) and the write-capture scope is only live for that synchronous call. This is load-bearing, not incidental: the scope is what makes overlapping optimistic operations never collide. If `mutate` could `await`, the scope would either span the await (reintroducing the exact `atomic()` collision problem) or clear mid-mutate (writes after the await go untracked and never roll back).
+
+That creates one sharp edge worth calling out, because it's easy to get wrong: **you cannot resolve a lazy record inside `mutate`.** `draft(id)` and `get(id)` are async (they resolve pool → IDB → on-demand fetch), so they can't be awaited in a synchronous `mutate`. The fix is to **hoist the load out** — resolve the record first, then mutate the already-pooled reference synchronously:
+
+```typescript
+// ❌ WRONG — mutate can't be async, so this record may not be loaded
+await storeManager.optimistic(
+  async () => {                                  // async mutate is not allowed
+    const issue = await store.issue.draft(id);   // and awaiting inside breaks the scope
+    issue.assign({ status: "done" });
+    return { id, status: "done" };
+  },
+  (payload) => api.update(payload),
+);
+
+// ✅ RIGHT — resolve first (async, once), then mutate synchronously
+const issue = await store.issue.draft(id);       // pool → IDB → on-demand, idempotent
+await storeManager.optimistic(
+  () => {                                         // sync: issue is guaranteed in-pool now
+    issue.assign({ status: "done" });
+    return { id, status: "done" };
+  },
+  (payload) => api.update(payload),
+);
+```
+
+Splitting the `await` from the mutate isn't a workaround — it's the correct decomposition. *Which* record and *is it loaded* is orthogonal to *stage these writes and roll them back on failure*. If you'd rather not close over the reference, `peek(id)` is a synchronous pool-only lookup and is safe inside `mutate` (it's a guaranteed hit once you've resolved the record above; it returns `undefined` on a cold miss).
+
+Resolve **everything you'll touch before** the mutate — for a multi-record edit, `await Promise.all([...])` the ids first, then run one synchronous `mutate`. You cannot discover-and-load a new cold record partway through.
+
 ## Choosing between `batch`, `atomic`, and `optimistic`
 
 The three primitives operate at different layers of the write pipeline: `batch` groups **commits**, `atomic` manages **staging**, `optimistic` ties staging to a **persist call**.
