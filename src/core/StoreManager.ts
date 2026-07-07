@@ -354,9 +354,12 @@ export interface AdvancedConfig<TContext = unknown> {
   undoableActions?: UndoableActionHandlers;
   /**
    * Track selected server-pushed deltas (e.g. an agent's streamed edits) as
-   * user-undoable. `evaluate` runs for every incoming sync action — own-write
-   * echoes and `"V"` confirmations excluded — and a `true` return captures
-   * the pre-delta state on the undo stack (one atomic entry per packet).
+   * user-undoable. `evaluate` runs for every incoming sync action except
+   * packets the engine provably owns (awaited write ACKs, undo
+   * compensations); telling any other echo apart from a remote edit — e.g.
+   * by an actor id the server includes in the delta — is the evaluator's
+   * job. A `true` return captures the pre-delta state on the undo stack
+   * (one atomic entry per packet).
    * `undo()` then reverts pool + storage optimistically and calls
    * `remoteUndo.undo(action)` to revert server-side by `action.syncId`; if
    * the handler throws, the local revert is rolled forward again and the

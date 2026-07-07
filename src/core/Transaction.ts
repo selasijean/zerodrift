@@ -224,10 +224,14 @@ export interface RemoteUndoAction {
 }
 
 /** Passed to `remoteUndo.evaluate` for every action in an incoming delta
- *  packet (own-write echoes and `"V"` confirmations are pre-filtered). */
+ *  packet. The engine pre-filters only packets it provably owns (awaited
+ *  write ACKs and undo compensations); distinguishing any other echo from a
+ *  genuinely remote edit — including `"V"` confirmations — is the
+ *  evaluator's job, typically via an actor/user id the server includes in
+ *  `data`. */
 export interface RemoteUndoContext {
   syncId: number;
-  action: "I" | "U" | "D" | "A" | "C";
+  action: "I" | "U" | "D" | "A" | "V" | "C";
   modelName: string;
   modelId: string;
   data?: Record<string, unknown>;

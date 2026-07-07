@@ -118,10 +118,13 @@ export interface SyncConnectionOptions {
    * fetch is in flight. The implementation is expected to be a cheap no-op
    * when no fetch is pending. */
   recordInflightDelete?: (modelName: string, id: string) => void;
-  /** When set, each incoming delta action (except own-write echoes and `"V"`
-   * confirmations) is offered to this evaluator; a `true` return captures
-   * the pre-delta state and records the packet on the undo stack as a
-   * `RemoteUndoAction`. Wired from `advanced.remoteUndo.evaluate`. */
+  /** When set, every action of every delta packet — except packets the
+   * engine provably owns (awaited write ACKs, undo compensations) — is
+   * offered to this evaluator; a `true` return captures the pre-delta state
+   * and records the packet on the undo stack as a `RemoteUndoAction`.
+   * Echo detection beyond the engine's own gate (e.g. by an actor/user id
+   * the server puts in `data`) is the evaluator's job. Wired from
+   * `advanced.remoteUndo.evaluate`. */
   remoteUndoEvaluate?: RemoteUndoConfig["evaluate"];
 }
 
@@ -281,11 +284,7 @@ export class SyncConnection extends BaseSSEConnection {
         // exempt — LIFO undo keeps their chains coherent — and own packets
         // never reach this branch.
         for (const action of packet.syncActions) {
-          if (
-            action.action === "V" ||
-            action.data == null ||
-            capturedActions.has(action)
-          ) {
+          if (action.data == null || capturedActions.has(action)) {
             continue;
           }
           this.queue.rebaseRemoteEntries(
@@ -387,10 +386,7 @@ export class SyncConnection extends BaseSSEConnection {
     try {
       const results = await Promise.all(
         packet.syncActions.map((action) =>
-          // "V" confirms this client's own optimistic write — never remote.
-          action.action === "V"
-            ? null
-            : this.captureRemoteChange(packet.syncId, action),
+          this.captureRemoteChange(packet.syncId, action),
         ),
       );
       const captured: RemoteChange[] = [];
@@ -438,7 +434,7 @@ export class SyncConnection extends BaseSSEConnection {
     try {
       tracked = this.remoteUndoEvaluate!({
         syncId,
-        action: action.action as "I" | "U" | "D" | "A" | "C",
+        action: action.action,
         modelName,
         modelId,
         data: action.data,
@@ -480,7 +476,7 @@ export class SyncConnection extends BaseSSEConnection {
         data: { id: modelId, ...action.data },
       };
     }
-    // "U"/"C" — and "I" onto an existing record, which applies as a merge.
+    // "U"/"V"/"C" — and "I" onto an existing record, which applies as a merge.
     // Capture only the fields the delta actually moves.
     const before: Record<string, unknown> = {};
     const after: Record<string, unknown> = {};

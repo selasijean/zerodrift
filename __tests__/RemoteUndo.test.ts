@@ -130,18 +130,36 @@ describe("remote-undo capture", () => {
     });
   });
 
-  it("skips V confirmations", async () => {
-    poolTask("t1", { title: "Old" });
-    const evaluate = vi.fn(() => true);
+  it("offers V actions to evaluate — echo detection is the consumer's call", async () => {
+    // A V is only *this* client's echo if the engine's own-syncId gate says
+    // so; for any other client the same broadcast is a remote edit. The
+    // consumer tells them apart via server metadata (e.g. an actor id).
+    const task = poolTask("t1", { title: "Old" });
+    const evaluate = vi.fn(
+      (ctx: RemoteUndoContext) => ctx.data?.actorId === "agent",
+    );
     setup({ evaluate, undo: vi.fn() });
 
     await process(conn, {
       syncId: 2,
-      syncActions: [{ ...update("t1", { title: "Mine" }), action: "V" }],
+      syncActions: [
+        { ...update("t1", { title: "Mine", actorId: "me" }), action: "V" },
+      ],
     });
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(evaluate.mock.calls[0][0].action).toBe("V");
+    expect(queue.remoteUndoDepth).toBe(0); // consumer said: my own echo
 
-    expect(evaluate).not.toHaveBeenCalled();
-    expect(queue.remoteUndoDepth).toBe(0);
+    await process(conn, {
+      syncId: 3,
+      syncActions: [
+        { ...update("t1", { title: "Agent edit", actorId: "agent" }), action: "V" },
+      ],
+    });
+    expect(queue.remoteUndoDepth).toBe(1); // consumer said: remote edit
+
+    await queue.undo();
+    expect(task.title).toBe("Mine");
   });
 
   it("skips the echo of this client's own write (awaitingSync syncId match)", async () => {
