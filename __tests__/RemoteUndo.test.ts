@@ -130,10 +130,9 @@ describe("remote-undo capture", () => {
     });
   });
 
-  it("offers V actions to evaluate — echo detection is the consumer's call", async () => {
-    // A V is only *this* client's echo if the engine's own-syncId gate says
-    // so; for any other client the same broadcast is a remote edit. The
-    // consumer tells them apart via server metadata (e.g. an actor id).
+  it("no action code is special-cased — evaluate decides echo vs remote via metadata", async () => {
+    // Action codes can't establish ownership; the consumer tells echoes and
+    // remote edits apart via server metadata (e.g. an actor id).
     const task = poolTask("t1", { title: "Old" });
     const evaluate = vi.fn(
       (ctx: RemoteUndoContext) => ctx.data?.actorId === "agent",

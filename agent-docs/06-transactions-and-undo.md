@@ -313,8 +313,8 @@ A `true` return captures the inverse as a `RemoteChange`:
 
 | Delta action | Captured inverse |
 |---|---|
-| `"U"` / `"V"` / `"C"` (and `"I"` onto an existing record) | Per-field `before`/`after` maps, restricted to fields the delta actually moves — no-op deltas aren't tracked |
-| `"I"` (fresh) | The inserted record; undo = delete |
+| Update onto an existing record (any data-bearing action, including `"I"` applied as a merge) | Per-field `before`/`after` maps, restricted to fields the delta actually moves — no-op deltas aren't tracked |
+| `"I"` (fresh insert) | The inserted record; undo = delete |
 | `"D"` / `"A"` | Full pre-delete snapshot; undo = restore |
 
 All captures from one packet form a **single atomic entry** (a `RemoteUndoAction`, `source: "remote"`) on the same undo stack as model transactions, keyed by the packet's `syncId`.
@@ -323,7 +323,7 @@ The engine pre-filters only packets it **provably owns**:
 - Packets whose `syncId` matches an `awaitingSync` transaction — echoes of this client's own writes, already undoable as local transactions.
 - Packets whose `syncId` was returned as `compensatingSyncId` by a previous `undo`/`redo` handler call — consumed one-shot so the engine's own reverts aren't re-tracked.
 
-Everything else — including `"V"` confirmations — reaches `evaluate`. An action code alone can't establish ownership (one client's `"V"` echo is every other client's remote edit), so distinguishing echoes from remote edits is the evaluator's job, via metadata the server puts in the delta (e.g. an `actorId`/`userId` field). This also covers the race where an echo outruns its HTTP ACK: the engine's syncId gate can't catch it, but an actor check does.
+Everything else reaches `evaluate`. The engine deliberately reads nothing more into the packet — action codes can't establish ownership (one client's write confirmation is every other client's remote edit), so distinguishing echoes from remote edits is the evaluator's job, via metadata the server puts in the delta (e.g. an `actorId`/`userId` field). This also covers the race where an echo outruns its HTTP ACK: the engine's syncId gate can't catch it, but an actor check does.
 
 ### Undo / redo semantics
 

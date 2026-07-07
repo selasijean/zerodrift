@@ -476,8 +476,8 @@ export class SyncConnection extends BaseSSEConnection {
         data: { id: modelId, ...action.data },
       };
     }
-    // "U"/"V"/"C" — and "I" onto an existing record, which applies as a merge.
-    // Capture only the fields the delta actually moves.
+    // Any other data-bearing action — including "I" onto an existing
+    // record — applies as a field merge; capture only the fields it moves.
     const before: Record<string, unknown> = {};
     const after: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(action.data)) {
