@@ -242,6 +242,8 @@ If a delta packet arrives during persist (or during an `atomic` `await`) for a f
 
 `runUndoable` side effects pass through `atomic` unchanged: their server mutation is **not** rolled back when the block throws — you must compensate manually if needed.
 
+Rule of thumb: explicit `save()`/`create()`/`delete()` calls that should group into one undo step → `store.batch`; staged edits that must all commit or all revert together → `atomic`; a staged edit whose fate depends on your own network call → `optimistic`. See [06-transactions-and-undo.md](06-transactions-and-undo.md#choosing-between-batch-atomic-and-optimistic) for the full comparison.
+
 ## How Hydration Works
 
 When the engine loads a raw record from IndexedDB or a server response, it calls `model.hydrate(data)` on a new or existing instance. Hydration runs the deserializers, sets property values, and resolves references via the pool.

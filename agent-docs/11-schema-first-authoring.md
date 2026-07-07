@@ -260,6 +260,8 @@ await store.runUndoable(
 );
 ```
 
+Choosing between `batch` / `atomic` / `optimistic`: `batch` groups explicit commits (no rollback), `atomic` commits-or-discards staged edits as one unit, `optimistic` ties staged fields to a persist call — see [06-transactions-and-undo.md](06-transactions-and-undo.md#choosing-between-batch-atomic-and-optimistic).
+
 Inside React, prefer `useUndoRedo()` and `useBatch()` — they subscribe to the queue so `canUndo`/`canRedo` are reactive. The `store.*` methods are the imperative path for headless code.
 
 ## Behavior extensions: `extend(...)`

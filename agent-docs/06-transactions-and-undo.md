@@ -183,6 +183,25 @@ Conflict policy on overlap is field-level last-writer-wins, mirroring SSE rebasi
 
 Use `optimistic()` instead of awaiting I/O inside `atomic()`: the atomic scope is process-global, and holding it across a round-trip both throws on a second `atomic()` and sweeps unrelated concurrent writes into the scope.
 
+## Choosing between `batch`, `atomic`, and `optimistic`
+
+The three primitives operate at different layers of the write pipeline: `batch` groups **commits**, `atomic` manages **staging**, `optimistic` ties staging to a **persist call**.
+
+- **`batch(fn)`** doesn't stage, track, or revert anything. You make every commit yourself (`save()`, `store.<entity>.create/delete`, `runUndoable`), and everything committed inside shares one `batchId` — one HTTP POST, one undo entry. A throw inside `fn` does **not** roll anything back; `endBatch` just closes the group.
+- **`atomic(fn)`** owns the save/discard decision. You only stage inside it (setters, `assign` — no `save()` calls); at the boundary it `save()`s every touched model or discards every touched model. Its commit path runs inside a `batch()` internally — that's where its one-undo-entry property comes from. `atomic` is built on top of `batch`, not beside it.
+- **`optimistic(mutate, persist)`** scopes the commit-or-revert decision to a network call, at field granularity (see above).
+
+| you're writing… | use |
+|---|---|
+| explicit `save()` / `create()` / `delete()` calls that should undo as one step and POST together | `batch` |
+| staged edits that should all commit or all revert together | `atomic` |
+| a staged edit whose fate depends on your own network call | `optimistic` |
+
+Two asymmetries worth knowing:
+
+- **Async:** `batch`'s async overload is safe in a way `atomic`'s isn't. A batch held across an `await` can't corrupt state — worst case, an unrelated `save()` lands in the same undo entry and they undo together. An atomic held across an `await` decides *commit vs. revert* for any tracked write that lands during the window — keep `atomic` callbacks synchronous and reach for `optimistic` when there's I/O. (Both throw on a second concurrent open: `TransactionQueue` allows one active batch at a time.)
+- **Rollback scope:** `atomic`'s rollback discards a touched model's *entire* pending state, including edits staged before the block started. `optimistic`'s rollback is surgical — it reverts exactly the fields its mutate wrote and leaves pre-existing staged edits (and later writers' values) alone.
+
 ## Undo/Redo
 
 The undo stack is an array of entries, each either `{ kind: "single", item }` or `{ kind: "batch", batchId, entries }`. `item` and `entries` hold `BaseTransaction | UndoableAction` — model transactions and remote actions sit on the same stack so a single user action that mixes both undoes atomically. See "Undoable remote actions" below for the `UndoableAction` side.
