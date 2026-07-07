@@ -309,9 +309,14 @@ function CommentRow({ comment }: { comment: Comment }) {
   return <li>{view.text} — {view.author}</li>;
 }
 
-function Comments({ issue }: { issue: Issue }) {
-  const { data: comments } = useRelation(issue.comments);
-  return <ul>{comments.map((c) => <CommentRow key={c.id} comment={c} />)}</ul>;
+function Comments({ issueId }: { issueId: string }) {
+  const { data: issue } = useRecord(store.issue, issueId);
+  const { data: comments } = useRelation(issue?.comments);
+  return (
+    <ul>
+      {comments.map((c) => <CommentRow key={c.id} comment={c} />)}
+    </ul>
+  );
 }
 ```
 
