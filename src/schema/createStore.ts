@@ -278,6 +278,18 @@ export interface StoreApi {
    */
   atomic<T>(fn: () => Promise<T>): Promise<T>;
   atomic<T>(fn: () => T): T;
+  /**
+   * Optimistic write with automatic rollback: `mutate` stages synchronously
+   * (visible immediately), `persist` runs with no transaction scope held,
+   * and only the fields `mutate` touched are committed on success or
+   * reverted on failure. Overlapping optimistic operations never collide —
+   * use this instead of awaiting I/O inside `atomic()`. See
+   * `StoreManager.optimistic` for the full contract.
+   */
+  optimistic<M, T>(
+    mutate: () => M,
+    persist: (staged: M) => Promise<T> | T,
+  ): Promise<T>;
   /** Pop and revert the top of the undo stack. */
   undo(): Promise<UndoResult | null>;
   /** Re-apply the top of the redo stack. */
@@ -340,6 +352,7 @@ export function createStore<
   const store: Record<string, unknown> = {
     batch: sm.batch.bind(sm) as StoreApi["batch"],
     atomic: sm.atomic.bind(sm) as StoreApi["atomic"],
+    optimistic: sm.optimistic.bind(sm) as StoreApi["optimistic"],
     undo: () => sm.undo(),
     redo: () => sm.redo(),
     get undoDepth() {

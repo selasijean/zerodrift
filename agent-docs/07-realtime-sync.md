@@ -189,7 +189,7 @@ Result: title = "My Title", priority = 2
 
 Your change wins (last-writer-wins). The server's other field changes are preserved. Your undo record is updated to reflect "Server Title" as the revert target.
 
-The same rebase property holds for **optimistic edits staged via `atomic()`** — there's no `UpdateTransaction` yet, but `BaseModel.hydrate` mirrors the conflict-detection rule against the field's `pendingChanges` baseline. The optimistic value stays visible through the await, and a later `discardUnsavedChanges()` (e.g. when the atomic block throws) lands on the server's rebased value instead of the stale pre-edit one.
+The same rebase property holds for **edits staged via `atomic()` or `optimistic()`** — there's no `UpdateTransaction` yet, but `BaseModel.hydrate` mirrors the conflict-detection rule against the field's `pendingChanges` baseline. The staged value stays visible while the operation is in flight, and a later rollback (`discardUnsavedChanges()` when an atomic block throws, or the compare-and-revert when an `optimistic()` persist rejects) lands on the server's rebased value instead of the stale pre-edit one.
 
 See [06-transactions-and-undo.md](./06-transactions-and-undo.md) for the full rebase story.
 

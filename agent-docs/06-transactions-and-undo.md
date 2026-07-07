@@ -175,6 +175,33 @@ Every transaction enqueued while a batch is open gets the same `batchId`. They'r
 
 `StoreManager.batch(fn)` wraps any synchronous function in begin/endBatch automatically.
 
+## `optimistic()` — persist-coupled writes
+
+`storeManager.optimistic(mutate, persist)` is the primitive for "optimistic mutation + awaited network persist + automatic rollback". `mutate` runs synchronously and its field writes are captured per `(model, field)` with their pre-write values; `persist` then runs with **no transaction scope held**, so any number of operations can be in flight at once. On resolve, exactly the captured fields are committed inside one `batch` (→ one undo entry); on reject, they're compare-and-reverted.
+
+Conflict policy on overlap is field-level last-writer-wins, mirroring SSE rebasing. Each field carries a stack of the live optimistic writes to it (oldest first; the top owns the visible value), and settling one operation consults that stack so overlapping commits and rollbacks resolve correctly in **any** order, not just LIFO: a rollback of the field's current owner restores the value of the next still-live writer below it (or the saved baseline if none), a rollback of a superseded write is a no-op, and a superseded-but-server-accepted *commit* is recorded locally so a later rollback of the writer above lands on it rather than a stale value. The visible value always ends as the last successful writer's, or the saved baseline if every overlapping write failed. A field a non-optimistic write changed out from under the stack is left to that external write (it wins).
+
+Use `optimistic()` instead of awaiting I/O inside `atomic()`: the atomic scope is process-global, and holding it across a round-trip both throws on a second `atomic()` and sweeps unrelated concurrent writes into the scope.
+
+## Choosing between `batch`, `atomic`, and `optimistic`
+
+The three primitives operate at different layers of the write pipeline: `batch` groups **commits**, `atomic` manages **staging**, `optimistic` ties staging to a **persist call**.
+
+- **`batch(fn)`** doesn't stage, track, or revert anything. You make every commit yourself (`save()`, `store.<entity>.create/delete`, `runUndoable`), and everything committed inside shares one `batchId` — one HTTP POST, one undo entry. A throw inside `fn` does **not** roll anything back; `endBatch` just closes the group.
+- **`atomic(fn)`** owns the save/discard decision. You only stage inside it (setters, `assign` — no `save()` calls); at the boundary it `save()`s every touched model or discards every touched model. Its commit path runs inside a `batch()` internally — that's where its one-undo-entry property comes from. `atomic` is built on top of `batch`, not beside it.
+- **`optimistic(mutate, persist)`** scopes the commit-or-revert decision to a network call, at field granularity (see above).
+
+| you're writing… | use |
+|---|---|
+| explicit `save()` / `create()` / `delete()` calls that should undo as one step and POST together | `batch` |
+| staged edits that should all commit or all revert together | `atomic` |
+| a staged edit whose fate depends on your own network call | `optimistic` |
+
+Two asymmetries worth knowing:
+
+- **Async:** `batch`'s async overload is safe in a way `atomic`'s isn't. A batch held across an `await` can't corrupt state — worst case, an unrelated `save()` lands in the same undo entry and they undo together. An atomic held across an `await` decides *commit vs. revert* for any tracked write that lands during the window — keep `atomic` callbacks synchronous and reach for `optimistic` when there's I/O. (Both throw on a second concurrent open: `TransactionQueue` allows one active batch at a time.)
+- **Rollback scope:** `atomic`'s rollback discards a touched model's *entire* pending state, including edits staged before the block started. `optimistic`'s rollback is surgical — it reverts exactly the fields its mutate wrote and leaves pre-existing staged edits (and later writers' values) alone.
+
 ## Undo/Redo
 
 The undo stack is an array of entries, each either `{ kind: "single", item }` or `{ kind: "batch", batchId, entries }`. `item` and `entries` hold `BaseTransaction | UndoableAction` — model transactions and remote actions sit on the same stack so a single user action that mixes both undoes atomically. See "Undoable remote actions" below for the `UndoableAction` side.

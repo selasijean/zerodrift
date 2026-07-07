@@ -139,7 +139,7 @@ The compiler enforces these invariants and rejects the schema otherwise:
 - Each `s.refId(...)` field is referenced by at most one link.
 - `from.as` and `to.many` don't collide with declared field names.
 - Two entities don't compile to the same registry name.
-- Schema entity keys don't collide with reserved `store.*` top-level methods (`batch`, `atomic`, `undo`, `redo`, `undoDepth`, `redoDepth`, `runUndoable`).
+- Schema entity keys don't collide with reserved `store.*` top-level methods (`batch`, `atomic`, `optimistic`, `undo`, `redo`, `undoDepth`, `redoDepth`, `runUndoable`).
 
 ## The typed `store` surface
 
@@ -231,14 +231,23 @@ Inside React, prefer the hooks ([typed React hooks](#typed-react-hooks) below). 
 store.batch(fn): string                    // sync — fn() runs in one batchId
 store.batch(async fn): Promise<string>     // async — finally-fires endBatch even on throw
 
-// Stage optimistic edits with all-or-nothing local commit semantics.
+// Stage edits with all-or-nothing local commit semantics — keep fn synchronous.
 // On resolve, every touched model's save() runs in one batch (one undo entry).
 // On throw, every touched model's discardUnsavedChanges() runs and the error rethrows.
-await store.atomic(async () => {
+store.atomic(() => {
   book.assign({ title: "X" });
   issue.assign({ status: "done" });
-  await api.call(); // throws → both edits roll back
 });
+
+// Pair an optimistic mutation with its persisting network call. mutate stages
+// synchronously (visible immediately); persist runs with no scope held, so
+// overlapping operations never collide. On resolve, only the fields mutate
+// touched commit (one undo entry); on reject, they revert (field-level
+// last-writer-wins on overlap). Don't await I/O inside atomic() — use this.
+await store.optimistic(
+  () => issue.assign({ status: "done" }),
+  () => api.call(),
+);
 
 await store.undo();                        // returns UndoResult | null
 await store.redo();
@@ -250,6 +259,8 @@ await store.runUndoable(
   { actionType: "publish" },
 );
 ```
+
+Choosing between `batch` / `atomic` / `optimistic`: `batch` groups explicit commits (no rollback), `atomic` commits-or-discards staged edits as one unit, `optimistic` ties staged fields to a persist call — see [06-transactions-and-undo.md](06-transactions-and-undo.md#choosing-between-batch-atomic-and-optimistic).
 
 Inside React, prefer `useUndoRedo()` and `useBatch()` — they subscribe to the queue so `canUndo`/`canRedo` are reactive. The `store.*` methods are the imperative path for headless code.
 

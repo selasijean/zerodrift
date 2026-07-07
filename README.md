@@ -16,7 +16,7 @@ The design is inspired by Linear's sync engine; see [Acknowledgments](#acknowled
 
 - **A small API for synced data**: read records synchronously, mutate model fields directly, call `save()`, or use typed store namespaces generated from a schema.
 - **App logic without cache choreography**: fetching, invalidation, optimistic updates, reconnects, offline replay, and conflict rebasing live in the engine instead of every screen.
-- **Optimistic writes with real recovery**: local changes update immediately, batch into transaction POSTs, persist through reloads, and reconcile when matching server deltas arrive.
+- **Optimistic writes with real recovery**: local changes update immediately, batch into transaction POSTs, persist through reloads, and reconcile when matching server deltas arrive. `store.optimistic(mutate, persist)` pairs a mutation with its own network call — the touched fields commit when it resolves and revert when it rejects, and any number of operations can be in flight at once.
 - **Relationships that stay live**: references, inverse collections, owned collections, and indexed lookups update as records hydrate, load lazily, or arrive over SSE.
 - **Schema or class models**: use decorators (`@ClientModel`, `@Property`, `@Reference`) or schema-as-data (`defineSchema(...)`, `entityFromZod(...)`) without `reflect-metadata`.
 - **Memory you can shape**: choose per-model `LoadStrategy` values for eager data, lazy tables, partial index-backed loading, local-only records, or ephemeral SSE-fed state. Declarative eviction policies cap pool size and auto-evict when sync groups change.
@@ -296,6 +296,13 @@ batch(() => {
   issue.priority = 1;
   issue.save();
 });
+
+// Tie a mutation to its own persisting call: the staged fields commit when it
+// resolves, revert when it rejects. Overlapping calls settle independently.
+await store.optimistic(
+  () => issue.assign({ priority: 1 }),
+  () => api.setPriority(issue.id, 1),
+);
 
 // remoteUndoDepth counts tracked remote deltas (advanced.remoteUndo) on the stack
 const { undo, redo, canUndo, canRedo, remoteUndoDepth } = useUndoRedo();
