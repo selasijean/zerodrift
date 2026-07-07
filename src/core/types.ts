@@ -313,12 +313,18 @@ export interface IStoreManager {
     propName: string,
     value: unknown,
   ): unknown;
-  /** @internal Notify the StoreManager that `model` was mutated. Inside
-   * an open `atomic()` scope this records the model so the scope can
-   * call `save()` on commit or `discardUnsavedChanges()` on rollback.
-   * No-op when no atomic scope is active. Called from
-   * `BaseModel.propertyChanged`; not part of the public adopter surface. */
-  registerAtomicTouch(model: BaseModel): void;
+  /** @internal Notify the StoreManager that a tracked field on `model` was
+   * written, so the active `optimistic()` capture or `atomic()` scope (if
+   * any) records the touch. Called from `BaseModel.propertyChanged` with
+   * `wasDirty` reflecting whether the field was already pending before
+   * this write; see `StoreManager.registerAtomicTouch` for the routing
+   * rules. Not part of the public adopter surface. */
+  registerAtomicTouch(
+    model: BaseModel,
+    propName: string,
+    oldValue: unknown,
+    wasDirty: boolean,
+  ): void;
   /** True iff `StoreManagerConfig.onModelTouched` is configured.
    * `BaseModel.propertyChanged` checks this before calling
    * `fireModelTouched` so the no-config path stays a single boolean read

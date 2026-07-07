@@ -212,19 +212,33 @@ Wraps the getter in MobX `computed()`. The value is memoized and only re-evaluat
 
 > The schema-first surface wraps these as `store.<entity>.create / patch / draft / delete / archive` — see [11-schema-first-authoring.md](11-schema-first-authoring.md).
 
-The optimistic flow lets you stage a multi-step user action and commit-or-discard at the boundary:
+Two composition primitives sit on top:
+
+**`storeManager.atomic(fn)`** — a *synchronous* multi-model staging unit. Every model touched inside `fn` is `save()`d on resolve (one batch → one undo entry) or `discardUnsavedChanges()`d on throw:
 
 ```typescript
-storeManager.atomic(async () => {
+storeManager.atomic(() => {
   book.assign({ title: "X" });
   issue.assign({ status: "done" });
-  await api.someServerCall();
-  // resolve → save() runs on every touched model, in one batch
 });
-// throw inside the callback → discardUnsavedChanges() runs on every touched model
 ```
 
-If a delta packet arrives during the `await` for a field you've optimistically edited, `pendingChanges` rebases its baseline to the server value while keeping your optimistic value visible — so a later discard lands on server truth, not the stale pre-edit value. Echoes of your own change are no-ops.
+Keep `fn` synchronous. **Don't await I/O inside `atomic()`** — the scope is process-global, so while an async `fn` is parked at an `await`, a second `atomic()` throws ("Nested atomic() is not supported") and any tracked write from anywhere in the app joins the open scope, getting committed or rolled back with it. The async overload exists for back-compat and local-only multi-step staging.
+
+**`storeManager.optimistic(mutate, persist)`** — pairs an optimistic mutation with its persisting network call, without holding a scope across the round-trip:
+
+```typescript
+await storeManager.optimistic(
+  () => page.assign({ sortIndex: next }),   // sync; visible immediately
+  () => api.reorderPages(updates),           // runs with no scope held
+);
+// resolve → only the fields mutate touched are committed (one undo entry)
+// reject  → those fields revert
+```
+
+The mutate phase opens and closes its capture synchronously, so overlapping operations never collide — two in-flight `optimistic()` calls commit and roll back independently, even on the same record. Same-field overlap resolves by field-level last-writer-wins: a rollback never clobbers a value a later writer staged. `mutate`'s return value is passed to `persist` (handy for building the request payload from staged values).
+
+If a delta packet arrives during persist (or during an `atomic` `await`) for a field you've optimistically edited, `pendingChanges` rebases its baseline to the server value while keeping your optimistic value visible — so a later rollback lands on server truth, not the stale pre-edit value. Echoes of your own change are no-ops.
 
 `runUndoable` side effects pass through `atomic` unchanged: their server mutation is **not** rolled back when the block throws — you must compensate manually if needed.
 

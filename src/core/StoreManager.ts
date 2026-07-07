@@ -56,7 +56,7 @@ import {
   COMPOUND_FETCH_THRESHOLD,
   wrapCompoundFetcher,
 } from "./CompoundIndexFetcher.js";
-import { BaseModel } from "./BaseModel.js";
+import { BaseModel, type OptimisticFieldCapture } from "./BaseModel.js";
 import {
   BootstrapPhase,
   LoadStrategy,
@@ -545,6 +545,17 @@ export class StoreManager<TContext = unknown> {
    * `null` when no scope is active. Mutations register themselves via
    * `registerAtomicTouch` (called from `BaseModel.propertyChanged`). */
   private activeAtomicScope: Set<BaseModel> | null = null;
+
+  /** Field-level captures for the currently-running `optimistic()` mutate
+   * phase. Only ever non-null for the duration of a synchronous mutate —
+   * never across an await — so overlapping optimistic operations cannot
+   * collide. Takes priority over `activeAtomicScope` in
+   * `registerAtomicTouch`: a mutate running while an async `atomic()` is
+   * parked at an await must not be misattributed to that atomic's scope. */
+  private activeOptimisticScope: Map<
+    BaseModel,
+    Map<string, OptimisticFieldCapture>
+  > | null = null;
   /** True only while the engine replays a redirected commit onto its target.
    * Gates every user-intent hook (`routeCommit`, `onModelTouched`) so the
    * engine's own `assign()`/`save()` during replay isn't mistaken for a
@@ -1879,18 +1890,26 @@ export class StoreManager<TContext = unknown> {
   // ── Atomic API ────────────────────────────────────────────────────────────
 
   /**
-   * Stage optimistic edits with all-or-nothing local commit semantics.
+   * Stage edits with all-or-nothing local commit semantics — a synchronous
+   * multi-model staging unit.
    *
-   *   storeManager.atomic(async () => {
+   *   storeManager.atomic(() => {
    *     book.assign({ title: "X" });
    *     issue.assign({ status: "done" });
-   *     await api.call();
    *   });
    *
    * Any model mutated inside `fn` registers with the active scope. On
    * resolve, every touched model's `save()` is called once (wrapped in a
    * single batch so undo collapses to one entry). On throw, every touched
    * model's `discardUnsavedChanges()` runs and the error re-throws.
+   *
+   * Keep `fn` synchronous. **Do not await I/O inside `atomic()`** — pair a
+   * mutation with its persisting network call via `optimistic()` instead.
+   * The scope is process-global: while an async `fn` is parked at an
+   * `await`, a second `atomic()` throws, and any tracked write from
+   * *anywhere* in the app joins the open scope and gets committed or rolled
+   * back with it. The async overload remains for back-compat and for
+   * multi-step local staging that doesn't leave the client.
    *
    * SSE deltas that arrive on a touched field during an `await` rebase the
    * model's `pendingChanges` baseline (see `BaseModel.hydrate`) — the
@@ -1910,6 +1929,11 @@ export class StoreManager<TContext = unknown> {
       throw new Error(
         "Nested atomic() is not supported. The outer scope must resolve " +
           "before opening another.",
+      );
+    }
+    if (this.activeOptimisticScope != null) {
+      throw new Error(
+        "atomic() cannot be opened inside an optimistic() mutate phase.",
       );
     }
     const scope = new Set<BaseModel>();
@@ -1959,8 +1983,121 @@ export class StoreManager<TContext = unknown> {
     return result;
   }
 
-  /** @internal */
-  registerAtomicTouch(model: BaseModel): void {
+  /**
+   * Optimistic write with automatic rollback: apply `mutate` synchronously
+   * (changes stage into `pendingChanges` and are visible immediately), then
+   * run `persist` with **no transaction scope held**. On resolve, only the
+   * fields `mutate` touched are committed (one batch → one undo entry); on
+   * reject (or a `mutate` throw), they revert. A field a later writer
+   * re-wrote in the meantime is left to its new owner — field-level
+   * last-writer-wins, the same policy the sync side applies.
+   *
+   *   await storeManager.optimistic(
+   *     () => page.assign({ sortIndex: next }),
+   *     () => api.reorderPages(updates),
+   *   );
+   *
+   * Because the scope opens and closes inside one synchronous mutate,
+   * overlapping optimistic operations never collide — use this instead of
+   * awaiting I/O inside `atomic()`. `mutate`'s return value is passed to
+   * `persist` (e.g. a payload built from staged values). `mutate` must be
+   * synchronous and must not open `atomic()` or another `optimistic()`.
+   * SSE deltas arriving while `persist` is in flight rebase the rollback
+   * baseline exactly as under `atomic()`. Models created (not yet pooled)
+   * during `mutate` are committed whole on success and dropped on failure.
+   */
+  async optimistic<M, T>(
+    mutate: () => M,
+    persist: (staged: M) => Promise<T> | T,
+  ): Promise<T> {
+    if (this.activeOptimisticScope != null) {
+      throw new Error(
+        "optimistic() mutate phases cannot nest — mutate must stay " +
+          "synchronous, so open the second optimistic() after the first " +
+          "mutate returns.",
+      );
+    }
+    const scope = new Map<BaseModel, Map<string, OptimisticFieldCapture>>();
+    // Snapshot the moment mutate finishes — even on throw — so the
+    // rollback's compare-and-revert sees the values mutate left behind.
+    const snapshot = () => {
+      for (const [model, fields] of scope) {
+        model.snapshotOptimisticWrites(fields);
+      }
+    };
+    this.activeOptimisticScope = scope;
+    let staged: M;
+    try {
+      staged = mutate();
+    } catch (err) {
+      this.activeOptimisticScope = null;
+      snapshot();
+      this.rollbackOptimisticScope(scope);
+      throw err;
+    }
+    this.activeOptimisticScope = null;
+    snapshot();
+    try {
+      const value = await persist(staged);
+      this.commitOptimisticScope(scope);
+      return value;
+    } catch (err) {
+      this.rollbackOptimisticScope(scope);
+      throw err;
+    }
+  }
+
+  private commitOptimisticScope(
+    scope: Map<BaseModel, Map<string, OptimisticFieldCapture>>,
+  ): void {
+    if (scope.size === 0) {
+      return;
+    }
+    this.batch(() => {
+      for (const [model, fields] of scope) {
+        if (model.store == null) {
+          // Created during mutate, never pooled — commit the whole record.
+          model.save();
+        } else {
+          model.saveFields(fields);
+        }
+      }
+    });
+  }
+
+  private rollbackOptimisticScope(
+    scope: Map<BaseModel, Map<string, OptimisticFieldCapture>>,
+  ): void {
+    for (const [model, fields] of scope) {
+      if (model.store == null) {
+        // Never pooled — never visible; nothing to revert.
+        continue;
+      }
+      model.rollbackFields(fields);
+    }
+  }
+
+  /** @internal Called from `BaseModel.propertyChanged` on every tracked
+   * field write. Routes the touch to the active `optimistic()` capture when
+   * one is open (field-level; first touch records the pre-write value),
+   * otherwise to the active `atomic()` scope (model-level). */
+  registerAtomicTouch(
+    model: BaseModel,
+    propName: string,
+    oldValue: unknown,
+    wasDirty: boolean,
+  ): void {
+    if (this.activeOptimisticScope != null) {
+      let fields = this.activeOptimisticScope.get(model);
+      if (fields == null) {
+        fields = new Map();
+        this.activeOptimisticScope.set(model, fields);
+      }
+      if (!fields.has(propName)) {
+        fields.set(propName, { pre: oldValue, wasDirty });
+      }
+      return;
+    }
     this.activeAtomicScope?.add(model);
   }
 

@@ -101,6 +101,8 @@ export function compileSchema(schema: SchemaDef): CompiledSchema {
  */
 const RESERVED_DB_KEYS: ReadonlySet<string> = new Set([
   "batch",
+  "atomic",
+  "optimistic",
   "undo",
   "redo",
   "undoDepth",

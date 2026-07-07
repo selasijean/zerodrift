@@ -175,6 +175,14 @@ Every transaction enqueued while a batch is open gets the same `batchId`. They'r
 
 `StoreManager.batch(fn)` wraps any synchronous function in begin/endBatch automatically.
 
+## `optimistic()` — persist-coupled writes
+
+`storeManager.optimistic(mutate, persist)` is the primitive for "optimistic mutation + awaited network persist + automatic rollback". `mutate` runs synchronously and its field writes are captured per `(model, field)` with their pre-write values; `persist` then runs with **no transaction scope held**, so any number of operations can be in flight at once. On resolve, exactly the captured fields are committed inside one `batch` (→ one undo entry); on reject, they're compare-and-reverted.
+
+Conflict policy on overlap is field-level last-writer-wins, mirroring SSE rebasing: a commit or rollback touches a field only if it still holds the value that operation wrote. A field re-written by a later operation is left to that operation to settle; a field that was already dirty before `mutate` rolls back to its pre-operation staged value and stays dirty for its original staker — so stacked in-flight edits unwind like savepoints.
+
+Use `optimistic()` instead of awaiting I/O inside `atomic()`: the atomic scope is process-global, and holding it across a round-trip both throws on a second `atomic()` and sweeps unrelated concurrent writes into the scope.
+
 ## Undo/Redo
 
 The undo stack is an array of entries, each either `{ kind: "single", item }` or `{ kind: "batch", batchId, entries }`. `item` and `entries` hold `BaseTransaction | UndoableAction` — model transactions and remote actions sit on the same stack so a single user action that mixes both undoes atomically. See "Undoable remote actions" below for the `UndoableAction` side.
