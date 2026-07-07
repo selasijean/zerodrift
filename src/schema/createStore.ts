@@ -44,8 +44,9 @@ export interface RecordCommitInterface {
    *
    *     record.watch(r => r.title, (next, prev) => …)
    *
-   * Inside React, prefer `useRecord` / `useRelation` — they wire the same
-   * thing through `useSyncExternalStore`. This is the imperative path.
+   * This is the imperative path — inside React, `useWatch(record, selector)`
+   * is this hook's counterpart (and compiler-safe); `useRecord` /
+   * `useRelation` cover record lookup and membership.
    */
   watch<T>(
     selector: (record: this) => T,

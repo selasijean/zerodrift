@@ -62,6 +62,7 @@ import {
   LoadStrategy,
   PropertyType,
   toError,
+  type IdentifierFn,
   type ModelMeta,
   type PropertyMeta,
   type PropertyChange,
@@ -310,15 +311,21 @@ export interface AdvancedConfig<TContext = unknown> {
    * Mint the `id` for newly-constructed client-side models. Not invoked for
    * server/IDB-hydrated records. Receives the live context from
    * `setContext` (or `<SyncProvider context>`); `undefined` until set.
+   * A per-entity `idStrategy` (same signature) takes precedence.
    * Defaults to `crypto.randomUUID()`.
    */
-  identifierFn?: (meta: ModelMeta, context: TContext | undefined) => string;
+  identifierFn?: IdentifierFn<TContext>;
   /**
    * Stamp a field transform onto each `(model, property)` at engine init
    * (walked once). The transform fires inside the property setter before
-   * the MobX box, receiving the value, instance, and live context — use it
+   * the MobX box, and on every hydration (bootstrap, IDB, SSE deltas,
+   * `create`/`draft`/`seed` inputs) — all data entering the pool is
+   * canonicalized, receiving the value, instance, and live context. Use it
    * to canonicalize cross-cutting input (tenant-prefix FKs, normalize
-   * strings) without per-field decorators. Per-StoreManager storage.
+   * strings) without per-field decorators. Transforms MUST be idempotent:
+   * values round-trip through IDB already-transformed and are transformed
+   * again on rehydration. During hydration the instance may be partially
+   * populated. Per-StoreManager storage.
    */
   applyFieldTransforms?: (
     meta: ModelMeta,
@@ -651,16 +658,20 @@ export class StoreManager<TContext = unknown> {
     return `${modelName}:${propName}`;
   }
 
-  /** Mint a fresh id, honoring `identifierFn` when configured. Folds the
-   * registry lookup in so callers can skip it entirely on the no-config
-   * path — `new Model()` is hot. */
+  /** Mint a fresh id. A per-entity `idStrategy` (schema `entity({...})` or
+   * `@ClientModel({...})`) wins over the global `identifierFn`; without
+   * either, `crypto.randomUUID()`. Folds the registry lookup in so callers
+   * skip it entirely on the no-config path — `new Model()` is hot. */
   mintId(instance: BaseModel): string {
     const fn = this.config.identifierFn;
-    if (fn == null) {
+    if (fn == null && !ModelRegistry.hasIdStrategies) {
       return crypto.randomUUID();
     }
     const meta = ModelRegistry.getMetaForInstance(instance);
-    return meta != null ? fn(meta, this.context) : crypto.randomUUID();
+    const strategy = meta?.idStrategy ?? fn;
+    return meta != null && strategy != null
+      ? strategy(meta, this.context)
+      : crypto.randomUUID();
   }
 
   // ── Bootstrap phases ──────────────────────────────────────────────────────

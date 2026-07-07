@@ -78,8 +78,10 @@ Gives you the raw `StoreManager` and current `status`. You won't need `sm` often
 
 ## The hook surface
 
-Four read hooks, plus `useUndoRedo` for the transaction stack. Every read
-hook takes a **handle** and returns the same `AsyncResource` shape —
+Four read hooks, plus `useWatch` for field-level reads (see
+[§ Field reads and the React Compiler](#field-reads-and-the-react-compiler--usewatch))
+and `useUndoRedo` for the transaction stack. Every read hook takes a
+**handle** and returns the same `AsyncResource` shape —
 `{ data, isLoading, isLoaded, error, reload }` — so consumer code is uniform
 regardless of whether the source is the pool, IDB, or the server.
 
@@ -261,6 +263,75 @@ React compares new snapshot to previous
 ```
 
 The `getSnapshot()` for `useRecords` returns `pool.getAll("Issue")` — the same array reference if nothing changed, or a new array if anything was added/removed/updated. React uses referential equality on the snapshot to decide whether to re-render. Components reading `team.issues.items` inside a MobX `observer` are woken by the inverse-link layer above instead.
+
+## Field reads and the React Compiler — useWatch
+
+The chain above covers **membership** (records and relation items added /
+removed / replaced) — the hooks hand back new array identities and
+`useSyncExternalStore` re-renders, no `observer()` needed. **Field-level**
+reads are different: pooled records are stable references whose fields update
+in place (MobX boxes), so `issue.title` read during render is only reactive
+inside a MobX `observer()` wrapper.
+
+The React Compiler breaks `observer()` **silently**. Auto-memoization keys the
+dereference on the unchanging `issue` reference, so the memoized block never
+re-executes — and since observer works by tracking reads made during render,
+the subscription is dropped and the component just stops updating. No error,
+no warning.
+
+`useWatch(record, selector)` is the compiler-safe read boundary — the React
+counterpart of the imperative `record.watch(selector, cb)`:
+
+```tsx
+const { data: issue } = useRecord(store.issue, issueId);
+const title = useWatch(issue, (i) => i.title);
+const badge = useWatch(issue, (i) => ({ title: i.title, done: i.done }));
+```
+
+- The selector runs **inside the library** (`node_modules` is excluded from
+  React Compiler transforms); a MobX reaction tracks whatever it reads.
+- The result crosses into the component as a **value snapshot**: identity
+  changes exactly when the selected contents change (shallow compare by
+  default; pass `{ equals: comparer.structural }` for deeply-nested
+  selections), stays stable otherwise. Downstream compiler memo cells keyed
+  on it recompute at the right times, and unrelated field changes don't
+  re-render.
+- Components using `useWatch` need no `observer()` wrapper at all, with or
+  without the compiler.
+
+**Lists**: membership is already covered by `useRecords` / `useRelation`; put
+the field reads in a per-row component (hooks can't run in loops, and this is
+the idiomatic list shape anyway — each row re-renders independently):
+
+```tsx
+function CommentRow({ comment }: { comment: Comment }) {
+  const view = useWatch(comment, (c) => ({ text: c.text, author: c.authorName }));
+  return <li>{view.text} — {view.author}</li>;
+}
+
+function Comments({ issue }: { issue: Issue }) {
+  const { data: comments } = useRelation(issue.comments);
+  return <ul>{comments.map((c) => <CommentRow key={c.id} comment={c} />)}</ul>;
+}
+```
+
+**Deriving order / filtering from field values** in a parent needs its own
+subscription too (the parent only re-renders on membership changes). The
+record argument can be the array — the selector's reads are tracked across
+every item:
+
+```tsx
+const sorted = useWatch(comments, (list) =>
+  [...list].sort((a, b) => a.priority - b.priority),
+);
+```
+
+A `priority` change on any comment re-fires the sort; a result with the same
+order shallow-compares equal and keeps its identity, so nothing re-renders.
+
+Teams that keep `observer()` components instead must exclude them from the
+compiler (`"use no memo"` directive) — but `useWatch` makes the component
+correct under both regimes and is the recommended path.
 
 ## Writing Data
 

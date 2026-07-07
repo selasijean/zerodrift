@@ -45,7 +45,7 @@ Decorator path: enable `experimentalDecorators` in your `tsconfig.json` (or the 
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `zerodrift`          | `StoreManager`, `BaseModel`, decorators, `MemoryAdapter`, relation field types (`RefCollection`/`BackRef`/`OwnedRefs`), and the config / error / sync types. The curated, stable surface. |
 | `zerodrift/schema`   | `defineSchema`, `entityFromZod`, field builders, links, extensions, and typed `store.<entity>.*` APIs.                                                                                    |
-| `zerodrift/react`    | `<SyncProvider>` and React hooks: `useRecord`, `useRecords`, `useRecordsByIndex`, `useRelation`, `useBatch`, `useUndoRedo`, `useBootstrapStatus`.                                         |
+| `zerodrift/react`    | `<SyncProvider>` and React hooks: `useRecord`, `useRecords`, `useRecordsByIndex`, `useRelation`, `useWatch`, `useBatch`, `useUndoRedo`, `useBootstrapStatus`.                             |
 | `zerodrift/internal` | Engine machinery (`ObjectPool`, `TransactionQueue`, `SyncConnection`, `ModelRegistry`, …) for tooling/tests. **No stability promise** — may change between releases.                      |
 
 ## Define your models
@@ -84,7 +84,7 @@ export class Issue extends BaseModel {
 }
 ```
 
-`@Property` fields are persisted and observable. `@Reference`, `@ReferenceCollection`, `@OwnedCollection`, and `@BackReference` describe relationships; `Lazy*` variants load on demand. `loadStrategy` controls whether a model loads during bootstrap or only when requested. Pass an explicit `@ClientModel({ name })` — it's the registry key and the `useRecord(Model, …)` handle; without it the class name is used, which minifiers mangle in production.
+`@Property` fields are persisted and observable. `@Reference`, `@ReferenceCollection`, `@OwnedCollection`, and `@BackReference` describe relationships; `Lazy*` variants load on demand. `loadStrategy` controls whether a model loads during bootstrap or only when requested. Pass an explicit `@ClientModel({ name })` — it's the registry key and the `useRecord(Model, …)` handle; without it the class name is used, which minifiers mangle in production. An optional `idStrategy` (on `@ClientModel` or schema `entity(...)`) mints ids for client-created records of that model, taking precedence over the global `advanced.identifierFn`.
 
 See [agent-docs/01-models-and-decorators.md](agent-docs/01-models-and-decorators.md) for the full decorator reference.
 
@@ -153,7 +153,7 @@ Pass `{ safe: true }` to skip records that are observed, dirty, or in-flight. Pa
 
 ## Schema-first with Zod
 
-If your record shapes already live in Zod, use `entityFromZod(...)` as the schema authoring path. Zod owns the field types; `fields` overrides add zerodrift metadata such as foreign keys and indexes.
+If your record shapes already live in Zod, use `entityFromZod(...)` as the schema authoring path. Zod owns the field types; `fields` overrides add zerodrift metadata such as foreign keys and indexes. `z.lazy(() => Shape)` wrappers (what codegen emits for recursive / forward-referenced schemas) are accepted and resolved, at runtime and in the inferred types.
 
 ```ts
 import { z } from "zod";
@@ -300,6 +300,21 @@ batch(() => {
 // remoteUndoDepth counts tracked remote deltas (advanced.remoteUndo) on the stack
 const { undo, redo, canUndo, canRedo, remoteUndoDepth } = useUndoRedo();
 ```
+
+Field reads during render (`issue.title`) are reactive via MobX `observer()` —
+which the React Compiler's auto-memoization silently breaks. `useWatch` is the
+compiler-safe read boundary: the selection runs inside the library and comes
+back as a value snapshot, so no `observer()` wrapper is needed at all:
+
+```tsx
+const { data: issue } = useRecord(store.issue, issueId);
+const title = useWatch(issue, (i) => i.title);
+const badge = useWatch(issue, (i) => ({ title: i.title, done: i.done }));
+```
+
+Re-renders fire when (and only when) the selected values change. See
+[agent-docs/08-react-integration.md](agent-docs/08-react-integration.md#field-reads-and-the-react-compiler--usewatch)
+for list and derived-sort patterns.
 
 Schema-authored stores pass the namespace as the handle — same hooks, typed
 record + `.indexed()`-constrained index keys:

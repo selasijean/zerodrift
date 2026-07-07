@@ -441,6 +441,7 @@ export class BaseModel {
   /**
    * React to property changes on this model without importing MobX.
    * Use on models obtained from the pool — `objectPool.getById` / `objectPool.getAll`.
+   * In React components, use `useWatch` from `zerodrift/react` instead.
    *
    * @param selector - reads the property (or derived value) to observe
    * @param callback - fires whenever the selector result changes; receives new and previous value
@@ -491,6 +492,13 @@ export class BaseModel {
   /** @internal */
   hydrate(data: Record<string, unknown>) {
     const meta = ModelRegistry.getMetaForInstance(this);
+    // Hydration writes bypass the property setters (box.set below), so field
+    // transforms must be applied here explicitly — otherwise bootstrap / SSE /
+    // create-input data would skip the canonicalization the setter path
+    // guarantees. Transforms are required to be idempotent (values round-trip
+    // through IDB already-transformed).
+    const sm = BaseModel.storeManager;
+    const transformer = sm != null && sm.hasFieldTransforms ? sm : null;
 
     // Wrap multi-field updates in a single MobX action so observers see one
     // coherent transition for SSE deltas that touch many fields at once.
@@ -513,20 +521,29 @@ export class BaseModel {
           const nested = value as Record<string, unknown>;
           this.hydrateNestedModel(propMeta.referenceTo!, nested);
           const idKey = propMeta.idField ?? key + "Id";
+          const nestedId =
+            transformer != null
+              ? transformer.applyTransform(this, idKey, nested.id)
+              : nested.id;
           // Rebase: if the FK is being optimistically edited, keep the
           // optimistic value visible but update its stored baseline to the
           // server's value, so a later `discardUnsavedChanges()` lands on
           // the rebased server truth rather than the stale pre-edit value.
           if (this.pendingChanges.has(idKey)) {
-            this.pendingChanges.set(idKey, nested.id);
+            this.pendingChanges.set(idKey, nestedId);
           } else {
-            (this as Record<string, unknown>)[`__raw_${idKey}`] = nested.id;
+            (this as Record<string, unknown>)[`__raw_${idKey}`] = nestedId;
           }
           continue;
         }
 
-        const deserialized =
+        const decoded =
           propMeta?.deserializer != null ? propMeta.deserializer(value) : value;
+        // The canonical in-memory form of the server/storage value.
+        const incoming =
+          transformer != null
+            ? transformer.applyTransform(this, key, decoded)
+            : decoded;
 
         // Rebase path mirrors UpdateTransaction.rebase: pendingChanges holds
         // the serialized baseline; an incoming server value that differs
@@ -540,8 +557,8 @@ export class BaseModel {
               : currentValue;
           const serverSerialized =
             propMeta?.serializer != null
-              ? propMeta.serializer(deserialized)
-              : value;
+              ? propMeta.serializer(incoming)
+              : incoming;
           if (serverSerialized !== optimisticSerialized) {
             this.pendingChanges.set(key, serverSerialized);
           }
@@ -549,16 +566,16 @@ export class BaseModel {
         }
 
         const oldRawValue = (this as Record<string, unknown>)[`__raw_${key}`];
-        (this as Record<string, unknown>)[`__raw_${key}`] = deserialized;
+        (this as Record<string, unknown>)[`__raw_${key}`] = incoming;
         const box = this.__mobx[key];
         if (box != null) {
-          box.set(deserialized);
+          box.set(incoming);
         }
         // box.set bypasses the prototype setter, so propertyChanged never fires
         // for delta-driven hydrates. Dispatch parent-link maintenance directly
         // so SSE-driven FK changes still wake the inverse RefCollection / BackRef.
         if (this.store != null && meta != null) {
-          this.maintainParentLinks(meta.name, key, oldRawValue, deserialized);
+          this.maintainParentLinks(meta.name, key, oldRawValue, incoming);
         }
       }
     });

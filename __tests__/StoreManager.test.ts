@@ -16,6 +16,7 @@ import {
   type OnDemandBatchFetcher,
 } from "@zerodrift/StoreManager";
 import { BootstrapPhase, PropertyType } from "@zerodrift/types";
+import { ModelRegistry } from "@zerodrift/ModelRegistry";
 import {
   TestTask,
   TestProject,
@@ -1462,6 +1463,67 @@ describe("StoreManager", () => {
       expect(fromAssign[0]!.value).toBe("p-1");
       expect(fromAssign[0]!.instance).toBe(task);
       expect(fromAssign[0]!.ctx).toEqual({ tenant: "acme" });
+    });
+
+    // Hydration bypasses the property setters (box.set), so transforms must
+    // fire inside BaseModel.hydrate too — otherwise bootstrap / SSE / create
+    // input skips the canonicalization the setter path guarantees.
+    const makePrefixManager = () =>
+      makeStoreManager({
+        workspaceId: "ws",
+        bootstrapFetcher: vi.fn(),
+        applyFieldTransforms: (_meta, prop) =>
+          prop.type === PropertyType.Reference
+            ? (value: unknown) =>
+                typeof value === "string" &&
+                value !== "" &&
+                !value.includes("/")
+                  ? `layer-1/${value}`
+                  : value
+            : undefined,
+      });
+    const hydrateTask = (
+      sm: ReturnType<typeof makePrefixManager>,
+      data: Record<string, unknown>,
+    ) =>
+      sm.objectPool.hydrateAndPut(
+        "TestTask",
+        ModelRegistry.getModelMeta("TestTask")!,
+        data,
+      ) as TestTask;
+
+    it("applies transforms when hydrating a new instance (bootstrap / SSE insert path)", () => {
+      const sm = makePrefixManager();
+      const task = hydrateTask(sm, { id: "t-1", title: "T", projectId: "p-1" });
+      expect(task.projectId).toBe("layer-1/p-1");
+      expect(task.title).toBe("T");
+    });
+
+    it("applies transforms on in-place hydrate of an existing instance (SSE update path)", () => {
+      const sm = makePrefixManager();
+      const task = hydrateTask(sm, { id: "t-1", projectId: "p-1" });
+      const again = hydrateTask(sm, { id: "t-1", projectId: "p-2" });
+      expect(again).toBe(task);
+      expect(task.projectId).toBe("layer-1/p-2");
+    });
+
+    it("rebases pending edits against the transformed server value", () => {
+      const sm = makePrefixManager();
+      const task = hydrateTask(sm, { id: "t-1", projectId: "p-0" });
+
+      task.projectId = "p-1"; // setter canonicalizes to layer-1/p-1
+      expect(task.hasUnsavedChanges).toBe(true);
+
+      // A bare server echo of our own edit canonicalizes to the optimistic
+      // value — the baseline must stay at the pre-edit value.
+      task.hydrate({ id: "t-1", projectId: "p-1" });
+      expect(task.projectId).toBe("layer-1/p-1");
+
+      // A genuinely remote change rebases the baseline to the transformed
+      // server truth, so discarding lands there.
+      task.hydrate({ id: "t-1", projectId: "p-9" });
+      task.discardUnsavedChanges();
+      expect(task.projectId).toBe("layer-1/p-9");
     });
   });
 });

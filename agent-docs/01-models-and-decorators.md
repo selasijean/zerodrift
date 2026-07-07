@@ -58,6 +58,8 @@ Available strategies: `Eager` (the default — in bootstrap, fully resident), `L
 
 `eviction` controls the declarative eviction policy. Set `false` to exempt a model from eviction entirely. Set `{ maxResident: 500 }` to cap the pool size with FIFO watermark eviction. `Eager` and `LocalOnly` models are exempt by default (a global `eviction.maxResident` does not touch them) — an `Eager` model opts in with its own `eviction` config, where `eviction: {}` accepts the global cap. For sync-group cleanup, use the `onSyncGroupDelete` callback with `evictByIndex`. See `02-object-pool.md` and `04-lazy-loading.md` for details.
 
+`idStrategy: (meta, ctx) => string` mints ids for client-created records of this model (`new Model()`, `create`, `draft`); server/IDB-hydrated records keep their ids. Same `IdentifierFn` signature as the global `advanced.identifierFn` (which it wins over), so a strategy function can move between the two scopes or be shared across models. The schema path's `entity({ idStrategy })` is equivalent.
+
 #### Abstract base classes
 
 `@Property` / `@Reference` / `@Action` / `@Computed` and friends do **not** register a model on their own. They stash their metadata in a per-class side-table; only `@ClientModel` registers a model and at that point drains the side-table for the concrete class plus every ancestor up the prototype chain. So you can declare shared fields on an abstract base without registering it:

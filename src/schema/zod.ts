@@ -20,8 +20,21 @@ interface ZodLike {
       type: string;
       innerType?: ZodLike;
       defaultValue?: unknown;
+      getter?: () => ZodLike;
     };
   };
+}
+
+/** Resolve `z.lazy(...)` wrappers to the schema they defer to. Codegen tools
+ * emit lazy for recursive / forward-referenced schemas; by the time
+ * `entityFromZod` runs, the referenced binding exists, so eager resolution
+ * is safe. */
+function unwrapLazy(schema: ZodLike): ZodLike {
+  let current = schema;
+  while (current._zod.def.type === "lazy" && current._zod.def.getter != null) {
+    current = current._zod.def.getter();
+  }
+  return current;
 }
 
 const PRIMITIVE_KIND = new Map<
@@ -37,9 +50,10 @@ const PRIMITIVE_KIND = new Map<
 
 /**
  * Convert any Zod schema into the equivalent schema-first `FieldBuilder`.
- * Handles the common nullable / optional / default modifiers; anything more
- * structured (objects, arrays, unions, enums) collapses to `s.json<T>()` so
- * the runtime stores the raw value and the TS type still flows from Zod.
+ * Handles the common nullable / optional / default / lazy modifiers (lazy
+ * wrappers are resolved eagerly); anything more structured (objects, arrays,
+ * unions, enums) collapses to `s.json<T>()` so the runtime stores the raw
+ * value and the TS type still flows from Zod.
  *
  * Zod is an optional peer dependency — calling this function requires the
  * caller to have installed `zod`.
@@ -53,6 +67,7 @@ export function fromZod<Z extends z.ZodType>(
   let defaultValue: unknown = undefined;
 
   while (true) {
+    current = unwrapLazy(current);
     const { type, innerType, defaultValue: inner } = current._zod.def;
     if (type === "nullable" && innerType != null) {
       nullable = true;
@@ -114,16 +129,39 @@ type ZodKindFromTypeName<T> = T extends "string"
  * Zod fields, not just `id`.
  */
 type ZodToFieldMeta<Z, Accum = Record<never, never>> = Z extends {
-  _zod: { def: { type: "nullable"; innerType: infer I } };
+  _zod: { def: { type: "lazy"; getter: () => infer I } };
 }
-  ? ZodToFieldMeta<I, Accum & { nullable: true }>
-  : Z extends { _zod: { def: { type: "optional"; innerType: infer I } } }
-    ? ZodToFieldMeta<I, Accum & { optional: true }>
-    : Z extends { _zod: { def: { type: "default"; innerType: infer I } } }
-      ? ZodToFieldMeta<I, Accum & { default: unknown }>
-      : Z extends { _zod: { def: { type: infer T extends string } } }
-        ? Accum & { kind: ZodKindFromTypeName<T> }
-        : Accum;
+  ? ZodToFieldMeta<I, Accum>
+  : Z extends { _zod: { def: { type: "nullable"; innerType: infer I } } }
+    ? ZodToFieldMeta<I, Accum & { nullable: true }>
+    : Z extends { _zod: { def: { type: "optional"; innerType: infer I } } }
+      ? ZodToFieldMeta<I, Accum & { optional: true }>
+      : Z extends { _zod: { def: { type: "default"; innerType: infer I } } }
+        ? ZodToFieldMeta<I, Accum & { default: unknown }>
+        : Z extends { _zod: { def: { type: infer T extends string } } }
+          ? Accum & { kind: ZodKindFromTypeName<T> }
+          : Accum;
+
+/**
+ * A Zod object, possibly wrapped in `z.lazy(...)`. Codegen emits
+ * `z.lazy(() => Shape)` for recursive / forward-referenced schemas;
+ * `entityFromZod` accepts either form and derives fields from the resolved
+ * object.
+ */
+export type ZodObjectOrLazy = z.ZodObject | z.ZodLazy<z.ZodObject>;
+
+/** Type-level analogue of the runtime `unwrapLazy`: peel `z.lazy(...)`
+ * wrappers until the deferred schema surfaces. */
+type UnwrapZodLazy<Z> = Z extends {
+  _zod: { def: { type: "lazy"; getter: () => infer I } };
+}
+  ? UnwrapZodLazy<I>
+  : Z;
+
+/** Shape record of a (possibly lazy-wrapped) Zod object. Every helper below
+ * reads the shape through this so lazy-wrapped schemas infer identically to
+ * bare `z.object(...)` ones. */
+type ShapeOf<Z> = UnwrapZodLazy<Z> extends { shape: infer S } ? S : never;
 
 /** Empty meta marker — convention-driven flags (autoIndex) layer on top.
  * `id` is excluded because the storage layer treats the PK specially and
@@ -173,12 +211,12 @@ export type EntityFromZodFieldOverride<AutoT = unknown> =
   | ((auto: FieldBuilder<AutoT>) => AnyFieldBuilder);
 
 type EntityFromZodFieldOverrides<
-  Z extends z.ZodObject,
+  Z extends ZodObjectOrLazy,
   AI extends string | undefined = undefined,
 > = {
-  [K in keyof Z["shape"] & string]?:
+  [K in keyof ShapeOf<Z> & string]?:
     | AnyFieldBuilder
-    | ((auto: AutoFieldFromZod<K, Z["shape"][K], AI>) => unknown);
+    | ((auto: AutoFieldFromZod<K, ShapeOf<Z>[K], AI>) => unknown);
 };
 
 /**
@@ -188,8 +226,8 @@ type EntityFromZodFieldOverrides<
  * field…\"" — naming the offender — instead of the bare "not assignable to
  * type 'never'" the previous `Record<…, never>` form produced.
  */
-type NoExtraZodFieldKeys<Z extends z.ZodObject, F> = {
-  [K in keyof F as K extends keyof Z["shape"] ? never : K]: `Error: '${K &
+type NoExtraZodFieldKeys<Z extends ZodObjectOrLazy, F> = {
+  [K in keyof F as K extends keyof ShapeOf<Z> ? never : K]: `Error: '${K &
     string}' is not a field declared on the Zod object passed to entityFromZod`;
 };
 
@@ -218,16 +256,16 @@ type FieldFromOverride<O, Auto> = O extends (...args: never[]) => infer R
  * entity's TS type so downstream helpers like `IndexedFieldKeys` see them.
  */
 type MergedFieldsFromZodObject<
-  Z extends z.ZodObject,
+  Z extends ZodObjectOrLazy,
   F,
   Om extends readonly string[] = readonly [],
   AI extends string | undefined = undefined,
 > = {
-  [K in keyof Z["shape"] as K extends Om[number]
+  [K in keyof ShapeOf<Z> as K extends Om[number]
     ? never
     : K]: K extends keyof F
-    ? FieldFromOverride<F[K], AutoFieldFromZod<K, Z["shape"][K], AI>>
-    : AutoFieldFromZod<K, Z["shape"][K], AI>;
+    ? FieldFromOverride<F[K], AutoFieldFromZod<K, ShapeOf<Z>[K], AI>>
+    : AutoFieldFromZod<K, ShapeOf<Z>[K], AI>;
 };
 
 /** Non-`fields` portion of the opts — shared across the public type and
@@ -235,10 +273,15 @@ type MergedFieldsFromZodObject<
  * top-level knob (like `external`) has to be added here intentionally. */
 type EntityFromZodOptsBase = Pick<
   EntityDef,
-  "loadStrategy" | "eviction" | "usedForPartialIndexes" | "name" | "version"
+  | "loadStrategy"
+  | "eviction"
+  | "usedForPartialIndexes"
+  | "name"
+  | "version"
+  | "idStrategy"
 >;
 
-export interface EntityFromZodOpts<Z extends z.ZodObject = z.ZodObject>
+export interface EntityFromZodOpts<Z extends ZodObjectOrLazy = z.ZodObject>
   extends EntityFromZodOptsBase {
   /**
    * Per-field overrides applied after the Zod-derived `FieldBuilder`.
@@ -255,9 +298,9 @@ export interface EntityFromZodOpts<Z extends z.ZodObject = z.ZodObject>
    *     });
    */
   fields?: {
-    [K in keyof Z["shape"] & string]?:
+    [K in keyof ShapeOf<Z> & string]?:
       | AnyFieldBuilder
-      | ((auto: AutoFieldFromZod<K, Z["shape"][K]>) => AnyFieldBuilder);
+      | ((auto: AutoFieldFromZod<K, ShapeOf<Z>[K]>) => AnyFieldBuilder);
   };
   /** Fields whose Zod name ends with this suffix pick up `.indexed()` —
    * intended for the common FK-naming convention (`/ID$/` → `autoIndex: "ID"`).
@@ -269,10 +312,13 @@ export interface EntityFromZodOpts<Z extends z.ZodObject = z.ZodObject>
 }
 
 /**
- * Convert a `z.object({ ... })` into an `EntityDef`. Each key on the Zod
- * object becomes a field via `fromZod`, then `opts.fields[key]` (if
- * present) is applied — either chained onto the auto-derived builder, or
- * used as a full replacement.
+ * Convert a `z.object({ ... })` — or a `z.lazy(() => z.object({ ... }))`,
+ * as codegen emits for recursive / forward-referenced schemas — into an
+ * `EntityDef`. Each key on the (resolved) Zod object becomes a field via
+ * `fromZod`, then `opts.fields[key]` (if present) is applied — either
+ * chained onto the auto-derived builder, or used as a full replacement.
+ * Override keys that aren't declared on the Zod object throw (they'd
+ * otherwise be dropped silently).
  *
  * The override map is captured via a `const`-modified generic so per-field
  * metadata (`.indexed()`, refId target, …) flows into the returned
@@ -294,9 +340,9 @@ export interface EntityFromZodOpts<Z extends z.ZodObject = z.ZodObject>
  * graph.
  */
 export function entityFromZod<
-  Z extends z.ZodObject,
+  Z extends ZodObjectOrLazy,
   const F = Record<never, never>,
-  const Om extends readonly (keyof Z["shape"] & string)[] = readonly [],
+  const Om extends readonly (keyof ShapeOf<Z> & string)[] = readonly [],
   const AI extends string | undefined = undefined,
 >(
   zSchema: Z,
@@ -306,15 +352,35 @@ export function entityFromZod<
     omit?: Om;
   },
 ): EntityDef<MergedFieldsFromZodObject<Z, F, Om, AI>> {
+  const resolved = unwrapLazy(zSchema as unknown as ZodLike);
+  const shape = (resolved as unknown as z.ZodObject).shape as
+    | Record<string, z.ZodType>
+    | undefined;
+  if (shape == null) {
+    throw new Error(
+      `entityFromZod: expected a z.object(...) schema (optionally wrapped ` +
+        `in z.lazy), got "${resolved._zod.def.type}".`,
+    );
+  }
   const overrides = (opts.fields ?? {}) as Record<
     string,
     EntityFromZodFieldOverride
   >;
+  const unknownOverrideKeys = Object.keys(overrides).filter(
+    (key) => !(key in shape),
+  );
+  if (unknownOverrideKeys.length > 0) {
+    throw new Error(
+      `entityFromZod: fields override${unknownOverrideKeys.length > 1 ? "s" : ""} ` +
+        `[${unknownOverrideKeys.join(", ")}] not declared on the Zod object ` +
+        `(declared: ${Object.keys(shape).join(", ")}).`,
+    );
+  }
   const omitted = new Set<string>(opts.omit ?? []);
   const autoIndexSuffix =
     opts.autoIndex != null && opts.autoIndex !== "" ? opts.autoIndex : null;
   const fieldsRecord: Record<string, AnyFieldBuilder> = {};
-  for (const [key, fieldSchema] of Object.entries(zSchema.shape)) {
+  for (const [key, fieldSchema] of Object.entries(shape)) {
     if (omitted.has(key)) {
       continue;
     }
@@ -339,6 +405,7 @@ export function entityFromZod<
     usedForPartialIndexes: opts.usedForPartialIndexes,
     name: opts.name,
     version: opts.version,
+    idStrategy: opts.idStrategy,
     fields: fieldsRecord,
   }) as EntityDef<MergedFieldsFromZodObject<Z, F, Om, AI>>;
 }
@@ -361,7 +428,7 @@ export function entityFromZod<
  * the handful that need a custom `fields` map or distinct `loadStrategy`.
  */
 type EntitiesFromZodResult<
-  Zods extends Record<string, z.ZodObject>,
+  Zods extends Record<string, ZodObjectOrLazy>,
   Om extends readonly string[],
   AI extends string | undefined,
 > = {
@@ -371,7 +438,7 @@ type EntitiesFromZodResult<
 };
 
 export function entitiesFromZod<
-  Zods extends Record<string, z.ZodObject>,
+  Zods extends Record<string, ZodObjectOrLazy>,
   const Om extends readonly string[] = readonly [],
   const AI extends string | undefined = undefined,
 >(

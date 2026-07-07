@@ -21,6 +21,7 @@ import { defineObservableProperty } from "./observability.js";
 import {
   PropertyType,
   LoadStrategy,
+  type IdentifierFn,
   type PropertyMeta,
   type ModelMeta,
   type ModelEvictionConfig,
@@ -153,6 +154,12 @@ export function ClientModel(
     usedForPartialIndexes?: boolean;
     schemaVersion?: number;
     eviction?: ModelEvictionConfig;
+    /**
+     * Mint ids for records of this model created client-side. Same
+     * signature as (and wins over) the global `advanced.identifierFn`;
+     * not invoked for server/IDB-hydrated records.
+     */
+    idStrategy?: IdentifierFn;
   } = {},
 ) {
   // Legacy decorator target — no better type exists for prototype manipulation
@@ -187,6 +194,9 @@ export function ClientModel(
     }
     if (opts.eviction != null) {
       meta.eviction = opts.eviction;
+    }
+    if (opts.idStrategy != null) {
+      ModelRegistry.setIdStrategy(modelName, opts.idStrategy);
     }
     // Drain decorator-stashed metadata for this class and every ancestor up
     // the prototype chain. Abstract bases never registered themselves; their

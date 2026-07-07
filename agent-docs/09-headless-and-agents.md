@@ -100,9 +100,11 @@ await sm.bootstrap();
 
 Context is read on demand at id-mint time, not captured — re-call `setContext` whenever the relevant state changes. If `identifierFn` is omitted, ids fall back to `crypto.randomUUID()` and `setContext` is a no-op.
 
-## Field transforms — canonicalize values on assign
+For entity-specific id schemes, prefer the per-entity `idStrategy` — `entity({ idStrategy })` in a schema or `@ClientModel({ idStrategy })` on a class. It has the same `IdentifierFn` signature (`(meta, ctx) => string`) and wins over the global `identifierFn`, so the global function doesn't have to branch on `meta.name` and a strategy can move between the two scopes unchanged.
 
-`applyFieldTransforms` is the registry-walk companion to `identifierFn`: at engine init it visits every `(model, property)` pair and asks the rule whether to install a transform. Whatever it returns runs inside the property setter (`issue.teamId = x`), receiving `(value, instance, ctx)`. Use it to apply cross-cutting input rewrites — layer/tenant prefixing, string normalization — without sprinkling per-field decorators across every model.
+## Field transforms — canonicalize values on the way in
+
+`applyFieldTransforms` is the registry-walk companion to `identifierFn`: at engine init it visits every `(model, property)` pair and asks the rule whether to install a transform. Whatever it returns runs for **all data entering the pool** — inside the property setter (`issue.teamId = x`) and on every hydration (bootstrap payloads, IDB reads, SSE deltas, `create` / `draft` / `seed` inputs) — receiving `(value, instance, ctx)`. Use it to apply cross-cutting input rewrites — layer/tenant prefixing, string normalization — without sprinkling per-field decorators across every model.
 
 ```typescript
 import { PropertyType, StoreManager } from "zerodrift";
@@ -131,7 +133,9 @@ const sm = new StoreManager<LayerContext>({
 sm.setContext({ layerId: "layer-prod" });
 ```
 
-Storage is per-StoreManager — rebuilding the engine swaps the rules cleanly without mutating `ModelRegistry`. The rule is invoked at most once per property; the setter hot path early-exits when nothing was registered. Read sibling fields from `instance` first; fall back to `ctx` when the instance hasn't been hydrated yet.
+Storage is per-StoreManager — rebuilding the engine swaps the rules cleanly without mutating `ModelRegistry`. The rule is invoked at most once per property; the setter and hydrate hot paths early-exit when nothing was registered. Read sibling fields from `instance` first; fall back to `ctx` when the instance hasn't been hydrated yet (during hydration the instance may be partially populated).
+
+Transforms MUST be idempotent (a canonical form is a fixed point — note the `value.includes("/")` guard above). Values are persisted already-transformed and transformed again when rehydrated from IDB or echoed back over SSE; a non-idempotent transform would compound on every round-trip.
 
 ## Reactivity Without React
 

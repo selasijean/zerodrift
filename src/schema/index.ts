@@ -25,7 +25,11 @@ export type {
 } from "./extend.js";
 
 export { fromZod, entityFromZod, entitiesFromZod } from "./zod.js";
-export type { EntityFromZodFieldOverride, EntityFromZodOpts } from "./zod.js";
+export type {
+  EntityFromZodFieldOverride,
+  EntityFromZodOpts,
+  ZodObjectOrLazy,
+} from "./zod.js";
 
 export type {
   EntityDef,

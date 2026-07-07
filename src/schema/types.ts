@@ -1,4 +1,9 @@
-import type { LoadStrategy, ModelEvictionConfig, OnDelete } from "../core/types.js";
+import type {
+  IdentifierFn,
+  LoadStrategy,
+  ModelEvictionConfig,
+  OnDelete,
+} from "../core/types.js";
 
 export type FieldKind =
   | "id"
@@ -53,6 +58,13 @@ export interface EntityDef<
   name?: string;
   /** Forces a schemaVersion override. Otherwise computed by the compiler. */
   version?: number;
+  /**
+   * Mint ids for records of this entity created client-side (`create`,
+   * `draft`, `new Model()`). Same signature as (and wins over) the global
+   * `advanced.identifierFn`, so a strategy can move between the two scopes;
+   * not invoked for server/IDB-hydrated records.
+   */
+  idStrategy?: IdentifierFn;
   /**
    * Marks this entity as registered elsewhere (typically by `@ClientModel`).
    * The compiler skips class generation and property/link registration for
