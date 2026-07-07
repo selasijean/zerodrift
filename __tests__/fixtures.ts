@@ -209,6 +209,42 @@ export class TestComment extends BaseModel {
   public task: TestTask;
 }
 
+// ── TestGeo (custom object codecs — for optimistic ownership tests) ───────────
+//
+// `point` uses a serializer that returns a fresh object per call, so identity
+// comparison alone would misreport an unchanged value as overwritten. `code`
+// uses an identity codec whose deserializer can be armed (via `codecFaults`) to
+// throw for one value, exercising a revert failure without breaking hydrate.
+
+/** Arms `TestGeo.code`'s deserializer to throw when it sees this exact value. */
+export const codecFaults: { deserThrowsOn: string | null } = {
+  deserThrowsOn: null,
+};
+
+@ClientModel({ name: "TestGeo", loadStrategy: LoadStrategy.Eager })
+export class TestGeo extends BaseModel {
+  @Property({
+    serializer: (v: unknown) =>
+      v == null ? v : { ...(v as Record<string, unknown>) },
+    deserializer: (v: unknown) =>
+      v == null ? v : { ...(v as Record<string, unknown>) },
+  })
+  public point: { lat: number; lng: number } | null = null;
+
+  @Property()
+  public label = "";
+
+  @Property({
+    deserializer: (v: unknown) => {
+      if (codecFaults.deserThrowsOn != null && v === codecFaults.deserThrowsOn) {
+        throw new Error("deserializer boom");
+      }
+      return v;
+    },
+  })
+  public code = "";
+}
+
 // ── TestActivity (on-demand / progressive loading) ────────────────────────────
 //
 // LoadStrategy.Partial means this model is NOT loaded at bootstrap.

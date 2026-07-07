@@ -21,6 +21,7 @@ import {
   type PropertyChange,
   type IObjectPool,
   type IStoreManager,
+  type ModelMeta,
 } from "./types.js";
 import { LazyCollectionBase, RefCollection, BackRef } from "./LazyCollection.js";
 import { OwnedRefs } from "./LazyOwnedCollection.js";
@@ -43,24 +44,39 @@ const FLAT_PROPERTY_TYPES = new Set([
 ]);
 
 /**
- * Per-field capture backing one `StoreManager.optimistic()` operation:
- * `pre` is the in-memory value just before the operation's first write
- * (only consumed when `wasDirty` — the field was already pending then);
- * `written` is the serialized post-mutate value that commit/rollback
- * compare against to decide ownership. See `StoreManager.optimistic`.
+ * One live write to a field by a `StoreManager.optimistic()` operation. A
+ * field accumulates a stack of these; the settlement section on `BaseModel`
+ * documents how the stack resolves. See also `StoreManager.optimistic`.
  */
-export interface OptimisticFieldCapture {
-  pre: unknown;
-  wasDirty: boolean;
+interface OptimisticWrite {
+  /** The owning operation. */
+  token: object;
+  /** In-memory value just before this write — the restore target when this
+   * entry rolls back off the top (patched as lower entries splice out). */
+  prev: unknown;
+  /** Whether the field was already pending underneath: rollback clears the
+   * baseline when false, leaves it dirty for a lower writer when true. */
+  wasDirtyBelow: boolean;
+  /** Serialized post-mutate value, for detecting an external overwrite. */
   written?: unknown;
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    (Object.getPrototypeOf(v) === Object.prototype ||
+      Object.getPrototypeOf(v) === null)
+  );
 }
 
 /** Structural equality on serialized field values — the notion of "same
  * value" the optimistic ownership checks use. Primitives compare by
- * identity, arrays shallow-recursively (array-producing serializers return
- * fresh instances per call, so identity alone would misreport them as
- * changed). The hydrate/rebase paths intentionally keep bare identity: a
- * false negative there only causes a harmless extra baseline rebase. */
+ * identity; arrays and plain objects compare recursively, because
+ * array/object-producing serializers return a fresh instance per call, so
+ * identity alone would misreport an unchanged value as overwritten. The
+ * hydrate/rebase paths intentionally keep bare identity: a false negative
+ * there only causes a harmless extra baseline rebase. */
 function serializedEquals(a: unknown, b: unknown): boolean {
   if (a === b) {
     return true;
@@ -68,6 +84,17 @@ function serializedEquals(a: unknown, b: unknown): boolean {
   if (Array.isArray(a) && Array.isArray(b)) {
     return (
       a.length === b.length && a.every((v, i) => serializedEquals(v, b[i]))
+    );
+  }
+  if (isPlainObject(a) && isPlainObject(b)) {
+    const aKeys = Object.keys(a);
+    if (aKeys.length !== Object.keys(b).length) {
+      return false;
+    }
+    return aKeys.every(
+      (k) =>
+        Object.prototype.hasOwnProperty.call(b, k) &&
+        serializedEquals(a[k], b[k]),
     );
   }
   return false;
@@ -104,6 +131,13 @@ export class BaseModel {
   __backRefs: Record<string, BackRef> = {};
 
   private pendingChanges = new Map<string, unknown>();
+
+  /** Per-field stacks of live `optimistic()` writes, oldest first. Lazily
+   * allocated on the first optimistic write and left `null` for the common
+   * case of a model no optimistic operation ever touches; each stack is
+   * deleted once its last write settles. Keyed by property name. See
+   * `OptimisticWrite` and `StoreManager.optimistic`. */
+  private optimisticStacks: Map<string, OptimisticWrite[]> | null = null;
 
   // ---------------------------------------------------------------------------
   // Change tracking
@@ -144,18 +178,8 @@ export class BaseModel {
         propMeta?.serializer != null ? propMeta.serializer(oldValue) : oldValue;
       this.pendingChanges.set(propName, serialized);
 
-      // Invalidate any OwnedCollections backed by this property so they
-      // re-resolve against the updated IDs array on next access.
       if (meta != null) {
-        for (const [collectionName, ownedPropMeta] of meta.properties) {
-          if (
-            ownedPropMeta.type === PropertyType.OwnedCollection &&
-            ownedPropMeta.idsField === propName
-          ) {
-            this.__collections[collectionName]?.invalidate();
-          }
-        }
-        this.maintainParentLinks(meta.name, propName, oldValue, newValue);
+        this.syncReferenceStructures(meta, propName, oldValue, newValue);
       }
 
       // Clean→dirty transition: fire after parent links are consistent so an
@@ -164,6 +188,29 @@ export class BaseModel {
         sm.fireModelTouched(this, meta.name);
       }
     }
+  }
+
+  /** Re-derive the structures that hang off a flat field's value: invalidate
+   * OwnedCollections backed by it (they re-resolve against the new IDs array)
+   * and re-route inverse RefCollection/BackRef membership for an FK change.
+   * Called on the forward write (`propertyChanged`) and on every revert path
+   * (`discardField`, `revertField`) so rolling an edit back doesn't strand
+   * inverse links pointing at the optimistic parent. */
+  private syncReferenceStructures(
+    meta: ModelMeta,
+    propName: string,
+    oldValue: unknown,
+    newValue: unknown,
+  ) {
+    for (const [collectionName, ownedPropMeta] of meta.properties) {
+      if (
+        ownedPropMeta.type === PropertyType.OwnedCollection &&
+        ownedPropMeta.idsField === propName
+      ) {
+        this.__collections[collectionName]?.invalidate();
+      }
+    }
+    this.maintainParentLinks(meta.name, propName, oldValue, newValue);
   }
 
   /** Forward an FK change to the pool so it can re-route inverse links. No-op
@@ -423,11 +470,15 @@ export class BaseModel {
    * in one `commitUpdate`. Every name must currently be pending. The stamp
    * goes through the setter while those entries are still pending so the
    * clean→dirty `onModelTouched` hook can't fire from a commit path.
+   * `serialized` supplies already-serialized new values for fields the
+   * caller has in hand (the optimistic owner-commit path), avoiding a
+   * second serialize; fields absent from it are serialized fresh.
    */
   private commitPendingFields(
     fieldNames: string[],
+    meta = ModelRegistry.getMetaForInstance(this),
+    serialized?: Map<string, unknown>,
   ): Record<string, PropertyChange> {
-    const meta = ModelRegistry.getMetaForInstance(this);
     if (fieldNames.length > 0 && meta?.properties.has("updatedAt") === true) {
       (this as Record<string, unknown>)["updatedAt"] = new Date();
       if (!fieldNames.includes("updatedAt")) {
@@ -438,14 +489,27 @@ export class BaseModel {
     for (const propName of fieldNames) {
       changes[propName] = {
         oldValue: this.pendingChanges.get(propName),
-        newValue: this.serializeField(
-          propName,
-          (this as Record<string, unknown>)[propName],
-          meta,
-        ),
+        newValue:
+          serialized != null && serialized.has(propName)
+            ? serialized.get(propName)
+            : this.serializeField(
+                propName,
+                (this as Record<string, unknown>)[propName],
+                meta,
+              ),
       };
       this.pendingChanges.delete(propName);
     }
+    this.enqueueChanges(changes, meta);
+    return changes;
+  }
+
+  /** Enqueue an already-assembled change record as one `commitUpdate`, if
+   * non-empty. Shared by `commitPendingFields` and `commitSupersededField`. */
+  private enqueueChanges(
+    changes: Record<string, PropertyChange>,
+    meta: ReturnType<typeof ModelRegistry.getMetaForInstance>,
+  ) {
     if (BaseModel.storeManager != null && Object.keys(changes).length > 0) {
       BaseModel.storeManager.commitUpdate(
         this.id,
@@ -453,7 +517,6 @@ export class BaseModel {
         changes,
       );
     }
-    return changes;
   }
 
   get hasUnsavedChanges() {
@@ -477,19 +540,39 @@ export class BaseModel {
     });
   }
 
-  /** Revert one pending field to its (possibly SSE-rebased) baseline and
-   * clear its pending entry. */
+  /** Revert one pending field to its (possibly SSE-rebased) baseline, clear
+   * its pending entry, and re-route any inverse links the value backed. */
   private discardField(
     propName: string,
     meta: ReturnType<typeof ModelRegistry.getMetaForInstance>,
   ) {
-    const propMeta = meta?.properties.get(propName);
-    const serializedBaseline = this.pendingChanges.get(propName);
-    const deserialized =
-      propMeta?.deserializer != null
-        ? propMeta.deserializer(serializedBaseline)
-        : serializedBaseline;
-    this.setQuiet(propName, deserialized);
+    const deserialized = this.deserializeField(
+      propName,
+      this.pendingChanges.get(propName),
+      meta,
+    );
+    this.writeReverted(propName, deserialized, meta, true);
+  }
+
+  /** Write a reverted value onto a field without change-tracking and re-route
+   * the inverse links it backed. `clearPending` also drops the field's
+   * pending entry (revert-to-baseline); leaving it keeps the field dirty for
+   * a lower optimistic writer that still owns the baseline. */
+  private writeReverted(
+    propName: string,
+    value: unknown,
+    meta: ReturnType<typeof ModelRegistry.getMetaForInstance>,
+    clearPending: boolean,
+  ) {
+    const old = (this as Record<string, unknown>)[propName];
+    if (clearPending) {
+      this.setQuiet(propName, value);
+    } else {
+      this.writeQuiet(propName, value);
+    }
+    if (meta != null) {
+      this.syncReferenceStructures(meta, propName, old, value);
+    }
   }
 
   /** @internal Serialize a field's value with its declared serializer —
@@ -503,72 +586,219 @@ export class BaseModel {
     return propMeta?.serializer != null ? propMeta.serializer(value) : value;
   }
 
-  /** @internal Snapshot the serialized post-mutate value of every captured
-   * field. Called by `StoreManager.optimistic()` the moment its mutate phase
-   * finishes (even on throw), before any other writer can interleave. */
-  snapshotOptimisticWrites(captures: Map<string, OptimisticFieldCapture>) {
+  private deserializeField(
+    propName: string,
+    value: unknown,
+    meta: ReturnType<typeof ModelRegistry.getMetaForInstance>,
+  ): unknown {
+    const propMeta = meta?.properties.get(propName);
+    return propMeta?.deserializer != null ? propMeta.deserializer(value) : value;
+  }
+
+  /** @internal Drop all staged changes without reverting values — the model
+   * is now the committed truth (its current values were just enqueued). */
+  clearPendingChanges() {
+    this.pendingChanges.clear();
+  }
+
+  /** @internal Run `fn` in one MobX action so a multi-model settlement
+   * flushes observers once. Lets StoreManager group reactions without
+   * importing mobx directly. */
+  static runInAction<T>(fn: () => T): T {
+    return runInAction(fn);
+  }
+
+  // ---------------------------------------------------------------------------
+  // optimistic() settlement — field-scoped, overlap-safe
+  //
+  // Each field carries a stack of live optimistic writes (oldest first); the
+  // top owns the visible value. Settling one write consults the stack so
+  // out-of-order commits/rollbacks of overlapping writes on the same field
+  // splice correctly instead of restoring a stale value. See
+  // `StoreManager.optimistic` for the settlement contract.
+  // ---------------------------------------------------------------------------
+
+  /** @internal Record operation `token`'s first write to `propName`. */
+  pushOptimisticWrite(
+    token: object,
+    propName: string,
+    prev: unknown,
+    wasDirtyBelow: boolean,
+  ) {
+    if (this.optimisticStacks == null) {
+      this.optimisticStacks = new Map();
+    }
+    let stack = this.optimisticStacks.get(propName);
+    if (stack == null) {
+      stack = [];
+      this.optimisticStacks.set(propName, stack);
+    }
+    stack.push({ token, prev, wasDirtyBelow });
+  }
+
+  /** @internal Snapshot the serialized post-mutate value of each field this
+   * operation wrote, so settlement can tell an external overwrite from our
+   * own value. Called the moment mutate finishes, before anything can
+   * interleave. */
+  snapshotOptimisticWrites(token: object, propNames: Iterable<string>) {
     const meta = ModelRegistry.getMetaForInstance(this);
-    for (const [propName, cap] of captures) {
-      cap.written = this.serializeField(
-        propName,
-        (this as Record<string, unknown>)[propName],
-        meta,
-      );
+    for (const propName of propNames) {
+      const entry = this.optimisticStacks
+        ?.get(propName)
+        ?.find((w) => w.token === token);
+      if (entry != null) {
+        entry.written = this.serializeField(
+          propName,
+          (this as Record<string, unknown>)[propName],
+          meta,
+        );
+      }
     }
   }
 
-  /** A capture is still owned by its operation iff the field is still
-   * pending and still holds the value the operation wrote — otherwise a
-   * later writer took it over (field-level last-writer-wins). */
-  private ownsCapture(
-    propName: string,
-    cap: OptimisticFieldCapture,
-    meta: ReturnType<typeof ModelRegistry.getMetaForInstance>,
-  ): boolean {
-    if (!this.pendingChanges.has(propName)) {
-      return false;
+  /** @internal Commit the fields operation `token` still owns. */
+  commitOptimistic(token: object, propNames: Iterable<string>) {
+    const meta = ModelRegistry.getMetaForInstance(this);
+    // Owner-commit fields deposit their already-serialized value here so the
+    // flush below doesn't serialize them a second time.
+    const owned = new Map<string, unknown>();
+    for (const propName of propNames) {
+      this.settleOptimisticField(token, propName, "commit", meta, owned);
     }
+    if (owned.size > 0) {
+      this.commitPendingFields([...owned.keys()], meta, owned);
+    }
+  }
+
+  /** @internal Roll back the fields operation `token` still owns. */
+  rollbackOptimistic(token: object, propNames: Iterable<string>) {
+    const meta = ModelRegistry.getMetaForInstance(this);
+    for (const propName of propNames) {
+      this.settleOptimisticField(token, propName, "rollback", meta);
+    }
+  }
+
+  /** @internal Drop `token`'s write stacks for the given fields without
+   * settling — used when the whole record commits as a create. */
+  clearOptimisticWrites(propNames: Iterable<string>) {
+    for (const propName of propNames) {
+      this.optimisticStacks?.delete(propName);
+    }
+  }
+
+  /** Settle one field for `token` against its write stack, resolving every
+   * case (ownership, supersession, external overwrite, rollback) in place. In
+   * commit mode, an owned field deposits its serialized value into `ownedOut`
+   * for the caller to flush via `commitPendingFields`. */
+  private settleOptimisticField(
+    token: object,
+    propName: string,
+    mode: "commit" | "rollback",
+    meta: ReturnType<typeof ModelRegistry.getMetaForInstance>,
+    ownedOut?: Map<string, unknown>,
+  ): void {
+    const stacks = this.optimisticStacks;
+    const stack = stacks?.get(propName);
+    if (stacks == null || stack == null) {
+      return;
+    }
+    const idx = stack.findIndex((w) => w.token === token);
+    if (idx === -1) {
+      return;
+    }
+    const entry = stack[idx];
+    const isTop = idx === stack.length - 1;
     const currentSerialized = this.serializeField(
       propName,
       (this as Record<string, unknown>)[propName],
       meta,
     );
-    return serializedEquals(currentSerialized, cap.written);
+    const ownsVisible =
+      isTop && serializedEquals(currentSerialized, entry.written);
+
+    if (mode === "commit") {
+      if (ownsVisible) {
+        // Owner: this value becomes the saved truth; the rest of the stack is
+        // moot. Hand the serialized value to the caller to flush.
+        ownedOut?.set(propName, currentSerialized);
+        stacks.delete(propName);
+      } else if (isTop) {
+        // A non-optimistic write changed the value under us — it wins (LWW);
+        // abandon the stack and commit nothing here.
+        stacks.delete(propName);
+      } else {
+        // Superseded by a later optimistic write, but our value did reach the
+        // server: record it (baseline rebases to it) so undo/IDB reflect it
+        // and a rollback of the writer above lands on our value.
+        this.commitSupersededField(propName, entry.written, meta);
+        this.spliceOptimisticWrite(
+          stack,
+          idx,
+          this.deserializeField(propName, entry.written, meta),
+        );
+      }
+      return;
+    }
+
+    // rollback
+    if (ownsVisible) {
+      if (entry.wasDirtyBelow) {
+        this.writeReverted(propName, entry.prev, meta, false);
+        // Landing back on the saved baseline makes the pending entry a no-op
+        // — clear it so the field reads clean.
+        if (
+          serializedEquals(
+            this.serializeField(propName, entry.prev, meta),
+            this.pendingChanges.get(propName),
+          )
+        ) {
+          this.pendingChanges.delete(propName);
+        }
+      } else {
+        this.discardField(propName, meta);
+      }
+      stack.pop();
+      if (stack.length === 0) {
+        stacks.delete(propName);
+      }
+    } else if (isTop) {
+      // Externally overwritten — the external value wins; drop the stack.
+      stacks.delete(propName);
+    } else {
+      // Superseded: our value is already gone; the writer above inherits our
+      // restore target so it falls through to what was below us.
+      this.spliceOptimisticWrite(stack, idx, entry.prev);
+    }
   }
 
-  /** @internal Commit the captured fields this operation still owns — see
-   * `StoreManager.optimistic` for the ownership rules. */
-  saveFields(captures: Map<string, OptimisticFieldCapture>) {
-    const meta = ModelRegistry.getMetaForInstance(this);
-    const owned: string[] = [];
-    for (const [propName, cap] of captures) {
-      if (this.ownsCapture(propName, cap, meta)) {
-        owned.push(propName);
-      }
+  /** Remove `stack[idx]`; the entry above it (if any) inherits `patchPrev` as
+   * its restore target, keeping the chain of restore values consistent. */
+  private spliceOptimisticWrite(
+    stack: OptimisticWrite[],
+    idx: number,
+    patchPrev: unknown,
+  ) {
+    if (idx + 1 < stack.length) {
+      stack[idx + 1].prev = patchPrev;
     }
-    if (owned.length > 0) {
-      this.commitPendingFields(owned);
-    }
+    stack.splice(idx, 1);
   }
 
-  /** @internal Compare-and-revert the captured fields this operation still
-   * owns — see `StoreManager.optimistic` for the rollback rules. */
-  rollbackFields(captures: Map<string, OptimisticFieldCapture>) {
-    const meta = ModelRegistry.getMetaForInstance(this);
-    runInAction(() => {
-      for (const [propName, cap] of captures) {
-        if (!this.ownsCapture(propName, cap, meta)) {
-          continue;
-        }
-        if (cap.wasDirty) {
-          // Restore the pre-operation staged value; the field stays dirty
-          // with its original baseline for whoever staged it first.
-          this.writeQuiet(propName, cap.pre);
-        } else {
-          this.discardField(propName, meta);
-        }
-      }
-    });
+  /** Enqueue a superseded-but-server-accepted field write as its own committed
+   * change and rebase the pending baseline to it. */
+  private commitSupersededField(
+    propName: string,
+    written: unknown,
+    meta: ReturnType<typeof ModelRegistry.getMetaForInstance>,
+  ) {
+    const changes: Record<string, PropertyChange> = {
+      [propName]: {
+        oldValue: this.pendingChanges.get(propName),
+        newValue: written,
+      },
+    };
+    this.pendingChanges.set(propName, written);
+    this.enqueueChanges(changes, meta);
   }
 
   /**

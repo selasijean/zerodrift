@@ -357,6 +357,7 @@ const sm = new StoreManager({
 | `sseConstruction` | The `sseClientFactory` throws when opening the connection | `url` |
 | `transactionSend` | `transactionSender` rejects; the batch is re-queued for retry | `batchSize` |
 | `onSyncGroupDelete` | The adopter's `onSyncGroupDelete` callback throws | `groupId` |
+| `optimisticSettle` | An `optimistic()` commit or rollback throws while settling one model (e.g. a consumer serializer/deserializer fails); other models still settle | `phase` (`"commit"` \| `"rollback"`), `modelName?`, `modelId` |
 
 Errors thrown from inside `onError` itself are swallowed, so a buggy logger can't crash the engine. Without `onError` configured, internal failures stay silent (existing behavior preserved).
 

@@ -390,7 +390,13 @@ export type EngineErrorContext =
       modelId: string;
     }
   | { kind: "onModelTouched"; modelName: string; modelId: string }
-  | { kind: "evictionRehydrate"; modelName: string; id: string };
+  | { kind: "evictionRehydrate"; modelName: string; id: string }
+  | {
+      kind: "optimisticSettle";
+      phase: "commit" | "rollback";
+      modelName?: string;
+      modelId: string;
+    };
 
 export type EngineErrorHandler = (
   err: Error,

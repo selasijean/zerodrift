@@ -8,7 +8,13 @@ import {
 } from "vitest";
 import { makeStoreManager } from "./helpers/storeManager";
 import { StoreManager, type BootstrapResponse } from "@zerodrift/StoreManager";
-import { TestTask, TestProject, addToPool } from "./fixtures";
+import {
+  TestTask,
+  TestProject,
+  TestGeo,
+  codecFaults,
+  addToPool,
+} from "./fixtures";
 
 const emptyBootstrapResponse: BootstrapResponse = {
   lastSyncId: 0,
@@ -462,6 +468,296 @@ describe("StoreManager.optimistic()", () => {
         async () => {},
       );
       await expect(inner!).rejects.toThrow(/cannot nest/);
+    });
+  });
+
+  // ── Regression coverage for the high-effort code review ─────────────────────
+  describe("settlement hardening", () => {
+    it("commits into an already-open batch instead of throwing", async () => {
+      const task = pooledTask({ id: "t1", title: "Old" });
+
+      const d = deferred();
+      // A batch held open across the persist window (async batch / undo-redo).
+      const batchId = manager.beginBatch();
+      const op = manager.optimistic(
+        () => task.assign({ title: "New" }),
+        () => d.promise,
+      );
+      d.resolve();
+      await op; // must not throw or roll back
+      manager.endBatch(batchId);
+
+      expect(task.title).toBe("New");
+      expect(task.hasUnsavedChanges).toBe(false);
+      expect(manager.transactionQueue.pendingCount).toBe(1);
+    });
+
+    it("an optimistic commit landing during a parked atomic() doesn't join its scope", async () => {
+      const task = pooledTask({ id: "t1", title: "T", done: false });
+      // Plain staged edit made before any scope opens.
+      task.assign({ done: true });
+      expect(task.hasUnsavedChanges).toBe(true);
+
+      const d = deferred();
+      const op = manager.optimistic(
+        () => task.assign({ title: "T2" }),
+        () => d.promise,
+      );
+
+      const barrier = deferred();
+      const atomicP = manager.atomic(async () => {
+        await barrier.promise;
+        throw new Error("abort");
+      });
+
+      // Commit fires while the atomic is parked — its updatedAt stamp must not
+      // enroll task into the atomic scope.
+      d.resolve();
+      await op;
+
+      barrier.resolve();
+      await expect(atomicP).rejects.toThrow("abort");
+
+      // The atomic's discard must not have wiped task's unrelated staged edit.
+      expect(task.done).toBe(true);
+    });
+  });
+
+  describe("same-field overlap settles in any order", () => {
+    it("both ops rejecting (forward order) revert to the saved value, clean", async () => {
+      const task = pooledTask({ id: "t1", title: "A" });
+      const d1 = deferred();
+      const d2 = deferred();
+      const a = manager.optimistic(
+        () => task.assign({ title: "B" }),
+        () => d1.promise,
+      );
+      const b = manager.optimistic(
+        () => task.assign({ title: "C" }),
+        () => d2.promise,
+      );
+
+      d1.reject(new Error("boom1"));
+      await expect(a).rejects.toThrow("boom1");
+      d2.reject(new Error("boom2"));
+      await expect(b).rejects.toThrow("boom2");
+
+      expect(task.title).toBe("A");
+      expect(task.hasUnsavedChanges).toBe(false);
+      expect(manager.transactionQueue.pendingCount).toBe(0);
+    });
+
+    it("earlier op resolving then later rejecting keeps the saved value, clean", async () => {
+      const task = pooledTask({ id: "t1", title: "A" });
+      const d1 = deferred();
+      const d2 = deferred();
+      const a = manager.optimistic(
+        () => task.assign({ title: "B" }),
+        () => d1.promise,
+      );
+      const b = manager.optimistic(
+        () => task.assign({ title: "C" }),
+        () => d2.promise,
+      );
+
+      d1.resolve();
+      await a; // op1's "B" reached the server (superseded locally by "C")
+      d2.reject(new Error("boom"));
+      await expect(b).rejects.toThrow("boom");
+
+      // Land on op1's server-accepted value, clean, with A→B recorded locally.
+      expect(task.title).toBe("B");
+      expect(task.hasUnsavedChanges).toBe(false);
+      expect(manager.transactionQueue.pendingCount).toBe(1);
+    });
+
+    it("both ops resolving commits both writes, final writer wins", async () => {
+      const task = pooledTask({ id: "t1", title: "A" });
+      const d1 = deferred();
+      const d2 = deferred();
+      const a = manager.optimistic(
+        () => task.assign({ title: "B" }),
+        () => d1.promise,
+      );
+      const b = manager.optimistic(
+        () => task.assign({ title: "C" }),
+        () => d2.promise,
+      );
+
+      d1.resolve();
+      await a;
+      d2.resolve();
+      await b;
+
+      expect(task.title).toBe("C");
+      expect(task.hasUnsavedChanges).toBe(false);
+      expect(manager.transactionQueue.pendingCount).toBe(2);
+    });
+  });
+
+  describe("object-valued serializers", () => {
+    it("commits and reverts a field whose serializer returns a fresh object", async () => {
+      const geo = new TestGeo();
+      geo.hydrate({ id: "g1", point: { lat: 1, lng: 2 }, label: "start" });
+      addToPool(manager, "TestGeo", geo);
+
+      const d1 = deferred();
+      const op1 = manager.optimistic(
+        () => geo.assign({ point: { lat: 3, lng: 4 } }),
+        () => d1.promise,
+      );
+      d1.resolve();
+      await op1;
+      expect(geo.point).toEqual({ lat: 3, lng: 4 });
+      expect(geo.hasUnsavedChanges).toBe(false);
+      expect(manager.transactionQueue.pendingCount).toBe(1);
+
+      const d2 = deferred();
+      const op2 = manager.optimistic(
+        () => geo.assign({ point: { lat: 9, lng: 9 } }),
+        () => d2.promise,
+      );
+      expect(geo.point).toEqual({ lat: 9, lng: 9 });
+      d2.reject(new Error("boom"));
+      await expect(op2).rejects.toThrow("boom");
+      expect(geo.point).toEqual({ lat: 3, lng: 4 });
+      expect(geo.hasUnsavedChanges).toBe(false);
+    });
+  });
+
+  describe("created models", () => {
+    it("a successfully created model is clean, not phantom-dirty", async () => {
+      const task = new TestTask();
+      task.hydrate({ id: "t-new", projectId: "p1" });
+      task.makeModelObservable();
+
+      await manager.optimistic(
+        () => task.assign({ title: "Created" }),
+        async () => {},
+      );
+
+      expect(manager.objectPool.getById("TestTask", "t-new")).toBe(task);
+      expect(task.hasUnsavedChanges).toBe(false);
+      expect(manager.transactionQueue.pendingCount).toBe(1);
+    });
+
+    it("a plain save() of a new model leaves it clean", () => {
+      const task = new TestTask();
+      task.hydrate({ id: "t-plain" });
+      task.makeModelObservable();
+      task.assign({ title: "X" });
+      task.save();
+      expect(task.hasUnsavedChanges).toBe(false);
+    });
+
+    it("rolls a rejected unpooled create back to clean (no leftover dirt)", async () => {
+      const task = new TestTask();
+      task.hydrate({ id: "t-new" });
+      task.makeModelObservable();
+
+      await expect(
+        manager.optimistic(
+          () => task.assign({ title: "Created" }),
+          async () => {
+            throw new Error("boom");
+          },
+        ),
+      ).rejects.toThrow("boom");
+
+      expect(manager.objectPool.getById("TestTask", "t-new")).toBeUndefined();
+      expect(task.title).toBe("");
+      expect(task.hasUnsavedChanges).toBe(false);
+      expect(manager.transactionQueue.pendingCount).toBe(0);
+    });
+  });
+
+  describe("guards and link maintenance", () => {
+    it("optimistic() opened inside an atomic() scope rejects without exfiltrating writes", async () => {
+      const a = pooledTask({ id: "t1", title: "A" });
+      const b = pooledTask({ id: "t2", title: "B" });
+
+      let inner: Promise<unknown> | undefined;
+      expect(() =>
+        manager.atomic(() => {
+          a.assign({ title: "A2" });
+          inner = manager.optimistic(
+            () => b.assign({ title: "B2" }),
+            async () => {},
+          );
+          throw new Error("abort");
+        }),
+      ).toThrow("abort");
+
+      await expect(inner).rejects.toThrow(/inside an atomic/);
+      // atomic threw → a reverted; b's mutate never ran (guard fired first).
+      expect(a.title).toBe("A");
+      expect(b.title).toBe("B");
+      expect(a.hasUnsavedChanges).toBe(false);
+      expect(b.hasUnsavedChanges).toBe(false);
+    });
+
+    it("rolling back an optimistic FK change re-routes inverse links", async () => {
+      const task = pooledTask({ id: "t1", title: "T", projectId: "p1" });
+      const spy = vi.spyOn(manager.objectPool, "notifyReferenceChange");
+
+      const d = deferred();
+      const op = manager.optimistic(
+        () => task.assign({ projectId: "p2" }),
+        () => d.promise,
+      );
+      expect(spy).toHaveBeenCalledWith(task, "TestTask", "projectId", "p1", "p2");
+      spy.mockClear();
+
+      d.reject(new Error("boom"));
+      await expect(op).rejects.toThrow("boom");
+
+      // The revert must re-route p2 → p1 (the bug: it never fired).
+      expect(spy).toHaveBeenCalledWith(task, "TestTask", "projectId", "p2", "p1");
+      expect(task.projectId).toBe("p1");
+    });
+
+    it("plain discardUnsavedChanges() also re-routes inverse links on an FK revert", () => {
+      // The fix lives in the shared discardField primitive, so the long-standing
+      // discardUnsavedChanges() path picks it up too — not just optimistic().
+      const task = pooledTask({ id: "t1", title: "T", projectId: "p1" });
+      task.assign({ projectId: "p2" });
+
+      const spy = vi.spyOn(manager.objectPool, "notifyReferenceChange");
+      task.discardUnsavedChanges();
+
+      expect(spy).toHaveBeenCalledWith(task, "TestTask", "projectId", "p2", "p1");
+      expect(task.projectId).toBe("p1");
+      expect(task.hasUnsavedChanges).toBe(false);
+    });
+
+    it("a deserializer throw during rollback isolates other models and preserves the persist error", async () => {
+      const geo = new TestGeo();
+      geo.hydrate({ id: "g1", code: "ok", label: "L" });
+      addToPool(manager, "TestGeo", geo);
+      const task = pooledTask({ id: "t1", title: "T" });
+
+      const emitSpy = vi.spyOn(manager, "emitError");
+      codecFaults.deserThrowsOn = "ok"; // arm: reverting code deserializes "ok" → throws
+      try {
+        const d = deferred();
+        const op = manager.optimistic(() => {
+          geo.assign({ code: "changed" });
+          task.assign({ title: "T2" });
+        }, () => d.promise);
+
+        d.reject(new Error("persist failed"));
+        await expect(op).rejects.toThrow("persist failed"); // not "deserializer boom"
+
+        // The second model still reverted despite geo's throw.
+        expect(task.title).toBe("T");
+        expect(task.hasUnsavedChanges).toBe(false);
+        expect(emitSpy).toHaveBeenCalledWith(
+          expect.any(Error),
+          expect.objectContaining({ kind: "optimisticSettle", phase: "rollback" }),
+        );
+      } finally {
+        codecFaults.deserThrowsOn = null;
+      }
     });
   });
 });
